@@ -101,6 +101,28 @@
       #status[data-state="success"] { color: #7cf2bd; }
       #status[data-state="error"] { color: #ff9a9a; }
 
+      #results:empty { display: none; }
+
+      #results {
+        display: grid;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .result-link {
+        display: block;
+        padding: 12px 14px;
+        border: 1px solid #385779;
+        border-radius: 12px;
+        color: #6fe7d2;
+        font-weight: 800;
+        line-height: 1.35;
+        text-decoration: none;
+      }
+
+      .result-link:focus,
+      .result-link:hover { border-color: #6fe7d2; }
+
       .privacy {
         margin: 20px 0 0;
         color: #8296b0;
@@ -163,6 +185,7 @@
       </form>
 
       <p id="status" role="status" aria-live="polite"></p>
+      <div id="results" aria-label="Pilot results"></div>
       <p class="privacy">
         The secret is used only for this request and is not saved by this page.
       </p>
@@ -173,16 +196,90 @@
       const secretInput = document.querySelector("#secret");
       const runButton = document.querySelector("#run-button");
       const status = document.querySelector("#status");
+      const results = document.querySelector("#results");
+
+      const wait = (milliseconds) =>
+        new Promise((resolve) => setTimeout(resolve, milliseconds));
 
       function showStatus(message, state = "") {
         status.textContent = message;
         status.dataset.state = state;
       }
 
+      function addResultLink(label, url) {
+        if (!url) return;
+
+        const link = document.createElement("a");
+        link.className = "result-link";
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = label;
+        results.append(link);
+      }
+
+      async function monitorPilot(secret, startedAt) {
+        const deadline = Date.now() + 90_000;
+
+        while (Date.now() < deadline) {
+          await wait(3_000);
+
+          const response = await fetch(
+            `/api/status?started_at=${encodeURIComponent(startedAt)}`,
+            {
+              method: "GET",
+              headers: { Authorization: `Bearer ${secret}` },
+              cache: "no-store",
+            },
+          );
+          const result = await response.json().catch(() => ({}));
+
+          if (!response.ok) {
+            throw new Error(result.error || `Status check failed (${response.status})`);
+          }
+
+          if (!result.workflow) {
+            showStatus("Pilot accepted. Waiting for GitHub to start…");
+            continue;
+          }
+
+          if (result.workflow.status !== "completed") {
+            showStatus("Pilot is running in GitHub…");
+            continue;
+          }
+
+          results.replaceChildren();
+          addResultLink("Open workflow results", result.workflow.html_url);
+
+          for (const pull of result.pull_requests || []) {
+            addResultLink(`Open PR #${pull.number}: ${pull.title}`, pull.html_url);
+          }
+
+          if (result.workflow.conclusion === "success") {
+            const prMessage = result.pull_requests?.length
+              ? ` ${result.pull_requests.length} new pull request${result.pull_requests.length === 1 ? " is" : "s are"} ready below.`
+              : " No new pull request was created.";
+            showStatus(`Pilot finished successfully.${prMessage}`, "success");
+          } else {
+            showStatus(
+              `Pilot finished with ${result.workflow.conclusion || "an unknown result"}. Open the workflow below.`,
+              "error",
+            );
+          }
+
+          return;
+        }
+
+        showStatus(
+          "Pilot is taking longer than expected. Check GitHub Actions for the final result.",
+          "error",
+        );
+      }
+
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
 
-        const secret = secretInput.value;
+        let secret = secretInput.value;
 
         if (!secret) {
           showStatus("Enter the Pilot trigger secret.", "error");
@@ -192,6 +289,8 @@
         runButton.disabled = true;
         runButton.textContent = "Starting…";
         showStatus("Starting Pilot…");
+        results.replaceChildren();
+        const startedAt = new Date().toISOString();
 
         try {
           const response = await fetch("/api/dispatch", {
@@ -205,11 +304,14 @@
             throw new Error(result.error || `Request failed (${response.status})`);
           }
 
-          showStatus("Pilot started. The command queue is processing now.", "success");
           secretInput.value = "";
+          showStatus("Pilot started. Checking GitHub progress now…", "success");
+          runButton.textContent = "Monitoring…";
+          await monitorPilot(secret, startedAt);
         } catch (error) {
           showStatus(error.message || "Pilot could not be started.", "error");
         } finally {
+          secret = "";
           runButton.disabled = false;
           runButton.textContent = "Run now";
         }
