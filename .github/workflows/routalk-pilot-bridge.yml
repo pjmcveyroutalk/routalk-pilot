@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      SHEET_ID: "1vYoz54luAe6i9O6T-CRWRDDAtCsKSXAYyeN4Upt4wlk"
+      SHEET_ID: "1KU9wp8B0ekuWhEJr7escH-wUgZUXAXg20V0bF6IzTWE"
       SHEET_NAME: "Commands"
       SHEET_GID: "1010314347"
       GH_TOKEN: ${{ github.token }}
@@ -796,3 +796,4 @@ jobs:
 
               raise SystemExit(1)
           PY
+
