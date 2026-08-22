@@ -109,6 +109,36 @@
         margin-top: 14px;
       }
 
+      .result-summary {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .summary-card {
+        padding: 12px;
+        border: 1px solid #294467;
+        border-radius: 12px;
+        background: #07101d;
+      }
+
+      .summary-label {
+        display: block;
+        color: #8296b0;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .summary-value {
+        display: block;
+        margin-top: 4px;
+        color: #f4f7fb;
+        font-size: 1rem;
+        font-weight: 900;
+      }
+
       .result-link {
         display: block;
         padding: 12px 14px;
@@ -218,6 +248,42 @@
         results.append(link);
       }
 
+      function addSummary(workflow, pullRequests) {
+        const summary = document.createElement("div");
+        summary.className = "result-summary";
+
+        const items = [
+          [
+            "Workflow",
+            workflow.conclusion === "success"
+              ? "Successful"
+              : workflow.conclusion || "Unknown",
+          ],
+          [
+            "New PRs",
+            String(pullRequests.length),
+          ],
+        ];
+
+        for (const [label, value] of items) {
+          const card = document.createElement("div");
+          card.className = "summary-card";
+
+          const labelElement = document.createElement("span");
+          labelElement.className = "summary-label";
+          labelElement.textContent = label;
+
+          const valueElement = document.createElement("strong");
+          valueElement.className = "summary-value";
+          valueElement.textContent = value;
+
+          card.append(labelElement, valueElement);
+          summary.append(card);
+        }
+
+        results.append(summary);
+      }
+
       async function monitorPilot(secret, startedAt) {
         const deadline = Date.now() + 90_000;
 
@@ -249,15 +315,21 @@
           }
 
           results.replaceChildren();
+          const pullRequests = result.pull_requests || [];
+          addSummary(result.workflow, pullRequests);
           addResultLink("Open workflow results", result.workflow.html_url);
 
-          for (const pull of result.pull_requests || []) {
-            addResultLink(`Open PR #${pull.number}: ${pull.title}`, pull.html_url);
+          for (const pull of pullRequests) {
+            const state = pull.draft ? "Draft" : "Ready";
+            addResultLink(
+              `${state} PR #${pull.number}: ${pull.title}`,
+              pull.html_url,
+            );
           }
 
           if (result.workflow.conclusion === "success") {
-            const prMessage = result.pull_requests?.length
-              ? ` ${result.pull_requests.length} new pull request${result.pull_requests.length === 1 ? " is" : "s are"} ready below.`
+            const prMessage = pullRequests.length
+              ? ` ${pullRequests.length} new pull request${pullRequests.length === 1 ? " is" : "s are"} ready below.`
               : " No new pull request was created.";
             showStatus(`Pilot finished successfully.${prMessage}`, "success");
           } else {
