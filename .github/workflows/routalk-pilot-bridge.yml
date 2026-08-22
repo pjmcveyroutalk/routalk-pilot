@@ -1,1 +1,798 @@
+name: ChatGPT Drive Bridge
 
+"on":
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: chatgpt-drive-bridge
+  cancel-in-progress: false
+
+jobs:
+  process-commands:
+    runs-on: ubuntu-latest
+
+    env:
+      SHEET_ID: "1vYoz54luAe6i9O6T-CRWRDDAtCsKSXAYyeN4Upt4wlk"
+      SHEET_NAME: "Commands"
+      SHEET_GID: "1010314347"
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch command queue
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CACHE_BUSTER="$(date +%s)"
+
+          URL="https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${SHEET_GID}&cb=${CACHE_BUSTER}"
+
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --header "Cache-Control: no-cache" \
+            --header "Pragma: no-cache" \
+            "$URL" \
+            -o /tmp/chatgpt-commands.csv
+
+          test -s /tmp/chatgpt-commands.csv
+
+          python3 <<'PY'
+          import csv
+
+          path = "/tmp/chatgpt-commands.csv"
+
+          with open(
+              path,
+              newline="",
+              encoding="utf-8-sig",
+          ) as file:
+              reader = csv.reader(file)
+              header = next(reader, [])
+
+          required = {
+              "command_id",
+              "action",
+              "branch",
+              "target_file",
+              "ready",
+          }
+
+          missing = required - set(header)
+
+          if missing:
+              raise SystemExit(
+                  "Downloaded CSV is missing required headers: "
+                  + ", ".join(sorted(missing))
+              )
+
+          print(
+              "Command queue CSV verified. Headers: "
+              + ", ".join(header)
+          )
+          PY
+
+      - name: Process ready commands
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import base64
+          import csv
+          import json
+          import re
+          import subprocess
+          from pathlib import Path
+
+          CSV_PATH = "/tmp/chatgpt-commands.csv"
+
+
+          def run(args, check=True):
+              result = subprocess.run(
+                  args,
+                  text=True,
+                  capture_output=True,
+                  check=False,
+              )
+
+              if check and result.returncode != 0:
+                  raise RuntimeError(
+                      f"Command failed: {' '.join(args)}\n"
+                      f"stdout: {result.stdout}\n"
+                      f"stderr: {result.stderr}"
+                  )
+
+              return result
+
+
+          def decode_b64(value, field):
+              value = (value or "").strip()
+
+              if not value:
+                  return ""
+
+              try:
+                  return base64.b64decode(
+                      value,
+                      validate=True,
+                  ).decode("utf-8")
+
+              except Exception as exc:
+                  raise ValueError(
+                      f"Invalid Base64 in {field}: {exc}"
+                  )
+
+
+          def validate_command_id(command_id):
+              if not re.fullmatch(
+                  r"[A-Za-z0-9._-]{1,80}",
+                  command_id or "",
+              ):
+                  raise ValueError("Invalid command_id")
+
+
+          def validate_branch(branch):
+              if not re.fullmatch(
+                  r"chatgpt/[A-Za-z0-9._/-]{1,120}",
+                  branch or "",
+              ):
+                  raise ValueError(
+                      "Branch must start with chatgpt/"
+                  )
+
+              if (
+                  ".." in branch
+                  or branch.endswith("/")
+                  or "//" in branch
+              ):
+                  raise ValueError("Unsafe branch name")
+
+
+          def validate_target(path_text):
+              path_text = (path_text or "").strip()
+              path = Path(path_text)
+
+              if not path_text or path.is_absolute():
+                  raise ValueError(
+                      "Target file must be a repo-relative path"
+                  )
+
+              if ".." in path.parts:
+                  raise ValueError(
+                      "Path traversal is not allowed"
+                  )
+
+              normalized = path_text.replace("\\", "/")
+              lowered = normalized.lower()
+
+              if lowered.startswith(".github/workflows/"):
+                  raise ValueError(
+                      "Bridge cannot modify workflow files"
+                  )
+
+              if (
+                  lowered.startswith(".git/")
+                  or lowered == ".git"
+              ):
+                  raise ValueError(
+                      "Bridge cannot modify Git internals"
+                  )
+
+              return normalized
+
+
+          def remote_branch_sha(branch):
+              result = run(
+                  [
+                      "git",
+                      "ls-remote",
+                      "--heads",
+                      "origin",
+                      branch,
+                  ],
+                  check=False,
+              )
+
+              if result.returncode != 0:
+                  return None
+
+              output = (
+                  result.stdout or ""
+              ).strip()
+
+              if not output:
+                  return None
+
+              return output.split()[0]
+
+
+          def remote_branch_exists(branch):
+              return remote_branch_sha(branch) is not None
+
+
+          def command_already_processed(command_id):
+              marker = f"Bridge command: `{command_id}`"
+
+              result = run(
+                  [
+                      "gh",
+                      "pr",
+                      "list",
+                      "--state",
+                      "all",
+                      "--limit",
+                      "1000",
+                      "--json",
+                      "number,body,url",
+                  ],
+                  check=False,
+              )
+
+              if result.returncode != 0:
+                  raise RuntimeError(
+                      "Could not inspect PR history before execution.\n"
+                      + result.stderr
+                  )
+
+              try:
+                  pull_requests = json.loads(
+                      result.stdout or "[]"
+                  )
+
+              except Exception as exc:
+                  raise RuntimeError(
+                      "Could not parse PR history before execution: "
+                      + str(exc)
+                  )
+
+              for pull_request in pull_requests:
+                  body = pull_request.get("body") or ""
+
+                  if marker in body:
+                      print(
+                          f"[SKIP] {command_id}: "
+                          "permanent PR-history ledger match "
+                          f"{pull_request.get('url')}"
+                      )
+                      return True
+
+              return False
+
+
+          def cleanup_merged_branch(branch, command_id):
+              validate_branch(branch)
+
+              remote_sha = remote_branch_sha(branch)
+
+              if not remote_sha:
+                  return False
+
+              result = run(
+                  [
+                      "gh",
+                      "pr",
+                      "list",
+                      "--head",
+                      branch,
+                      "--base",
+                      "main",
+                      "--state",
+                      "merged",
+                      "--limit",
+                      "20",
+                      "--json",
+                      "number,mergedAt,headRefName,headRefOid",
+                  ],
+                  check=False,
+              )
+
+              if result.returncode != 0:
+                  print(
+                      f"[WARN] {command_id}: "
+                      "could not inspect merged PRs for "
+                      f"{branch}"
+                  )
+                  return False
+
+              try:
+                  prs = json.loads(
+                      result.stdout or "[]"
+                  )
+
+              except Exception:
+                  print(
+                      f"[WARN] {command_id}: "
+                      "could not parse merged PR data for "
+                      f"{branch}"
+                  )
+                  return False
+
+              matching = []
+
+              for pr in prs:
+                  if (
+                      pr.get("mergedAt")
+                      and pr.get("headRefName") == branch
+                      and pr.get("headRefOid") == remote_sha
+                  ):
+                      matching.append(pr)
+
+              if not matching:
+                  return False
+
+              delete = run(
+                  [
+                      "git",
+                      "push",
+                      "origin",
+                      "--delete",
+                      branch,
+                  ],
+                  check=False,
+              )
+
+              if delete.returncode != 0:
+                  print(
+                      f"[WARN] {command_id}: "
+                      "merged branch cleanup failed for "
+                      f"{branch}\n"
+                      f"{delete.stderr}"
+                  )
+                  return False
+
+              pr_number = matching[0].get(
+                  "number"
+              )
+
+              print(
+                  f"[CLEANUP] {command_id}: "
+                  f"deleted merged branch {branch} "
+                  f"from PR #{pr_number}"
+              )
+
+              return True
+
+
+          def apply_command(row):
+              command_id = (
+                  row.get("command_id") or ""
+              ).strip()
+
+              branch = (
+                  row.get("branch") or ""
+              ).strip()
+
+              target = validate_target(
+                  row.get("target_file")
+              )
+
+              validate_command_id(command_id)
+              validate_branch(branch)
+
+              if command_already_processed(command_id):
+                  return
+
+              if remote_branch_exists(branch):
+                  cleaned = cleanup_merged_branch(
+                      branch,
+                      command_id,
+                  )
+
+                  if not cleaned:
+                      print(
+                          f"[SKIP] {command_id}: "
+                          f"branch already exists: {branch}"
+                      )
+                      return
+
+              commit_message = decode_b64(
+                  row.get("commit_message_b64"),
+                  "commit_message_b64",
+              )
+
+              pr_title = decode_b64(
+                  row.get("pr_title_b64"),
+                  "pr_title_b64",
+              )
+
+              pr_body = decode_b64(
+                  row.get("pr_body_b64"),
+                  "pr_body_b64",
+              )
+
+              chunks = [
+                  row.get("content_b64_1") or "",
+                  row.get("content_b64_2") or "",
+                  row.get("content_b64_3") or "",
+                  row.get("content_b64_4") or "",
+              ]
+
+              content_b64 = "".join(
+                  chunk.strip()
+                  for chunk in chunks
+                  if chunk and chunk.strip()
+              )
+
+              if not content_b64:
+                  raise ValueError(
+                      "No file content supplied"
+                  )
+
+              try:
+                  file_bytes = base64.b64decode(
+                      content_b64,
+                      validate=True,
+                  )
+
+              except Exception as exc:
+                  raise ValueError(
+                      f"Invalid Base64 file content: {exc}"
+                  )
+
+              if len(file_bytes) > 180_000:
+                  raise ValueError(
+                      "File payload exceeds 180 KB bridge limit"
+                  )
+
+              if not commit_message:
+                  commit_message = (
+                      f"ChatGPT bridge: {command_id}"
+                  )
+
+              if not pr_title:
+                  pr_title = (
+                      f"ChatGPT change: {command_id}"
+                  )
+
+              run([
+                  "git",
+                  "fetch",
+                  "origin",
+                  "main",
+              ])
+
+              run([
+                  "git",
+                  "checkout",
+                  "-B",
+                  branch,
+                  "origin/main",
+              ])
+
+              destination = Path(target)
+
+              destination.parent.mkdir(
+                  parents=True,
+                  exist_ok=True,
+              )
+
+              destination.write_bytes(
+                  file_bytes
+              )
+
+              run([
+                  "git",
+                  "config",
+                  "user.name",
+                  "Routalk ChatGPT Bridge",
+              ])
+
+              run([
+                  "git",
+                  "config",
+                  "user.email",
+                  "41898282+github-actions[bot]"
+                  "@users.noreply.github.com",
+              ])
+
+              run([
+                  "git",
+                  "add",
+                  "--",
+                  target,
+              ])
+
+              diff = run(
+                  [
+                      "git",
+                      "diff",
+                      "--cached",
+                      "--quiet",
+                  ],
+                  check=False,
+              )
+
+              if diff.returncode == 0:
+                  print(
+                      f"[SKIP] {command_id}: "
+                      "requested content matches main"
+                  )
+                  return
+
+              run([
+                  "git",
+                  "commit",
+                  "-m",
+                  commit_message,
+              ])
+
+              run([
+                  "git",
+                  "push",
+                  "--set-upstream",
+                  "origin",
+                  branch,
+              ])
+
+              body = (
+                  pr_body
+                  + "\n\n---\n"
+                  + f"Bridge command: `{command_id}`\n"
+                  + "Created automatically from the "
+                  + "ChatGPT Drive command queue."
+              ).strip()
+
+              result = run(
+                  [
+                      "gh",
+                      "pr",
+                      "create",
+                      "--draft",
+                      "--base",
+                      "main",
+                      "--head",
+                      branch,
+                      "--title",
+                      pr_title,
+                      "--body",
+                      body,
+                  ],
+                  check=False,
+              )
+
+              if result.returncode != 0:
+                  existing = run(
+                      [
+                          "gh",
+                          "pr",
+                          "list",
+                          "--head",
+                          branch,
+                          "--base",
+                          "main",
+                          "--state",
+                          "open",
+                          "--json",
+                          "number,url",
+                      ],
+                      check=False,
+                  )
+
+                  try:
+                      found = json.loads(
+                          existing.stdout or "[]"
+                      )
+
+                  except Exception:
+                      found = []
+
+                  if not found:
+                      raise RuntimeError(
+                          "Branch pushed but PR creation failed.\n"
+                          + result.stderr
+                      )
+
+                  print(
+                      f"[OK] {command_id}: "
+                      f"existing PR {found[0]}"
+                  )
+
+              else:
+                  print(
+                      f"[OK] {command_id}: "
+                      f"{result.stdout.strip()}"
+                  )
+
+
+          def merge_command(row):
+              command_id = (
+                  row.get("command_id") or ""
+              ).strip()
+
+              validate_command_id(command_id)
+
+              raw_pr = (
+                  row.get("pr_number") or ""
+              ).strip()
+
+              if not raw_pr.isdigit():
+                  raise ValueError(
+                      "Merge command requires numeric pr_number"
+                  )
+
+              pr_number = int(raw_pr)
+
+              result = run([
+                  "gh",
+                  "pr",
+                  "view",
+                  str(pr_number),
+                  "--json",
+                  "number,state,mergedAt,"
+                  "headRefName,baseRefName,url",
+              ])
+
+              info = json.loads(
+                  result.stdout
+              )
+
+              if info.get("mergedAt"):
+                  head_branch = str(
+                      info.get("headRefName", "")
+                  )
+
+                  if head_branch.startswith(
+                      "chatgpt/"
+                  ):
+                      cleanup_merged_branch(
+                          head_branch,
+                          command_id,
+                      )
+
+                  print(
+                      f"[SKIP] {command_id}: "
+                      f"PR #{pr_number} already merged"
+                  )
+                  return
+
+              if info.get("state") != "OPEN":
+                  raise ValueError(
+                      f"PR #{pr_number} is not open"
+                  )
+
+              if info.get("baseRefName") != "main":
+                  raise ValueError(
+                      "Bridge only merges PRs targeting main"
+                  )
+
+              head_branch = str(
+                  info.get("headRefName", "")
+              )
+
+              if not head_branch.startswith(
+                  "chatgpt/"
+              ):
+                  raise ValueError(
+                      "Bridge only merges chatgpt/* branches"
+                  )
+
+              result = run(
+                  [
+                      "gh",
+                      "pr",
+                      "merge",
+                      str(pr_number),
+                      "--squash",
+                      "--delete-branch",
+                  ],
+                  check=False,
+              )
+
+              if result.returncode != 0:
+                  raise RuntimeError(
+                      f"Merge failed for PR #{pr_number}. "
+                      "It may be waiting on checks.\n"
+                      f"stdout: {result.stdout}\n"
+                      f"stderr: {result.stderr}"
+                  )
+
+              cleanup_merged_branch(
+                  head_branch,
+                  command_id,
+              )
+
+              print(
+                  f"[OK] {command_id}: "
+                  f"merged PR #{pr_number}"
+              )
+
+
+          with open(
+              CSV_PATH,
+              newline="",
+              encoding="utf-8-sig",
+          ) as file:
+              rows = list(
+                  csv.DictReader(file)
+              )
+
+          ready_rows = [
+              row
+              for row in rows
+              if (
+                  row.get("ready") or ""
+              ).strip().upper() == "READY"
+          ]
+
+          if not ready_rows:
+              print(
+                  "No READY commands found."
+              )
+              raise SystemExit(0)
+
+          failures = []
+
+          for row in ready_rows:
+              command_id = (
+                  row.get("command_id") or ""
+              ).strip() or "<missing>"
+
+              action = (
+                  row.get("action") or ""
+              ).strip().lower()
+
+              try:
+                  if action == "apply":
+                      apply_command(row)
+
+                  elif action == "merge":
+                      merge_command(row)
+
+                  else:
+                      raise ValueError(
+                          f"Unsupported action: {action}"
+                      )
+
+              except Exception as exc:
+                  failures.append(
+                      f"{command_id}: {exc}"
+                  )
+
+                  print(
+                      f"[ERROR] "
+                      f"{command_id}: {exc}"
+                  )
+
+              run(
+                  [
+                      "git",
+                      "reset",
+                      "--hard",
+                  ],
+                  check=False,
+              )
+
+              run(
+                  [
+                      "git",
+                      "checkout",
+                      "main",
+                  ],
+                  check=False,
+              )
+
+          if failures:
+              print("\nFailures:")
+
+              for failure in failures:
+                  print(
+                      f" - {failure}"
+                  )
+
+              raise SystemExit(1)
+          PY
