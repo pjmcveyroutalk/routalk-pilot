@@ -153,6 +153,14 @@
       .result-link:focus,
       .result-link:hover { border-color: #6fe7d2; }
 
+      .merge-button {
+        margin-top: 0;
+        min-height: 48px;
+        border: 1px solid #6fe7d2;
+        background: transparent;
+        color: #6fe7d2;
+      }
+
       .privacy {
         margin: 20px 0 0;
         color: #8296b0;
@@ -248,6 +256,60 @@
         results.append(link);
       }
 
+      function addMergeButton(pull, secretSession) {
+        const button = document.createElement("button");
+        button.className = "merge-button";
+        button.type = "button";
+        button.textContent = `Merge PR #${pull.number}`;
+
+        button.addEventListener("click", async () => {
+          if (!secretSession.value || Date.now() > secretSession.expiresAt) {
+            secretSession.value = "";
+            showStatus("Merge session expired. Run Pilot again to continue.", "error");
+            button.disabled = true;
+            return;
+          }
+
+          const confirmed = window.confirm(
+            `Merge PR #${pull.number} into main and delete its branch?`,
+          );
+
+          if (!confirmed) return;
+
+          button.disabled = true;
+          button.textContent = "Merging…";
+          showStatus(`Validating and merging PR #${pull.number}…`);
+
+          try {
+            const response = await fetch("/api/merge", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${secretSession.value}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ pr_number: pull.number }),
+            });
+            const result = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+              throw new Error(result.error || `Merge failed (${response.status})`);
+            }
+
+            button.textContent = `PR #${pull.number} merged`;
+            showStatus(
+              `PR #${pull.number} merged successfully${result.branch_deleted ? " and its branch was deleted" : ""}.`,
+              "success",
+            );
+          } catch (error) {
+            button.disabled = false;
+            button.textContent = `Retry merge PR #${pull.number}`;
+            showStatus(error.message || "Pull request could not be merged.", "error");
+          }
+        });
+
+        results.append(button);
+      }
+
       function addSummary(workflow, pullRequests) {
         const summary = document.createElement("div");
         summary.className = "result-summary";
@@ -284,7 +346,7 @@
         results.append(summary);
       }
 
-      async function monitorPilot(secret, startedAt) {
+      async function monitorPilot(secretSession, startedAt) {
         const deadline = Date.now() + 90_000;
 
         while (Date.now() < deadline) {
@@ -294,7 +356,7 @@
             `/api/status?started_at=${encodeURIComponent(startedAt)}`,
             {
               method: "GET",
-              headers: { Authorization: `Bearer ${secret}` },
+              headers: { Authorization: `Bearer ${secretSession.value}` },
               cache: "no-store",
             },
           );
@@ -325,6 +387,7 @@
               `${state} PR #${pull.number}: ${pull.title}`,
               pull.html_url,
             );
+            addMergeButton(pull, secretSession);
           }
 
           if (result.workflow.conclusion === "success") {
@@ -379,7 +442,14 @@
           secretInput.value = "";
           showStatus("Pilot started. Checking GitHub progress now…", "success");
           runButton.textContent = "Monitoring…";
-          await monitorPilot(secret, startedAt);
+          const secretSession = {
+            value: secret,
+            expiresAt: Date.now() + 10 * 60 * 1000,
+          };
+          setTimeout(() => {
+            secretSession.value = "";
+          }, 10 * 60 * 1000);
+          await monitorPilot(secretSession, startedAt);
         } catch (error) {
           showStatus(error.message || "Pilot could not be started.", "error");
         } finally {
