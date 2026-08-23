@@ -1,14 +1,17 @@
 const crypto = require("node:crypto");
 
+const GITHUB_API = "https://api.github.com";
+const GITHUB_TIMEOUT_MS = 10_000;
+const MAX_BODY_BYTES = 4_096;
+
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(left || "");
   const rightBuffer = Buffer.from(right || "");
-
   if (leftBuffer.length !== rightBuffer.length) return false;
   return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function headers(token) {
+function githubHeaders(token) {
   return {
     Accept: "application/vnd.github+json",
     Authorization: `Bearer ${token}`,
@@ -18,19 +21,52 @@ function headers(token) {
   };
 }
 
+function setSecurityHeaders(response, requestId) {
+  response.setHeader("Cache-Control", "no-store, max-age=0");
+  response.setHeader("Pragma", "no-cache");
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Request-Id", requestId);
+}
+
+function send(response, status, requestId, body) {
+  return response.status(status).json({ ...body, request_id: requestId });
+}
+
+function validRepositoryPart(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 100 &&
+    /^[A-Za-z0-9_.-]+$/.test(value)
+  );
+}
+
 async function github(url, token, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: { ...headers(token), ...(options.headers || {}) },
-  });
-  const data = await response.json().catch(() => ({}));
-  return { ok: response.ok, status: response.status, data };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), GITHUB_TIMEOUT_MS);
+  try {
+    const result = await fetch(url, {
+      ...options,
+      headers: { ...githubHeaders(token), ...(options.headers || {}) },
+      signal: controller.signal,
+    });
+    const data = await result.json().catch(() => ({}));
+    return { ok: result.ok, status: result.status, data };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      timedOut: error?.name === "AbortError",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function readBody(request) {
   if (!request.body) return {};
   if (typeof request.body === "object") return request.body;
-
   try {
     return JSON.parse(request.body);
   } catch {
@@ -38,99 +74,136 @@ function readBody(request) {
   }
 }
 
+function upstreamFailure(response, requestId, operation, result) {
+  console.error("Pilot GitHub request failed", {
+    request_id: requestId,
+    operation,
+    status: result.status,
+    timed_out: Boolean(result.timedOut),
+  });
+  return send(response, result.timedOut ? 504 : 502, requestId, {
+    error: result.timedOut
+      ? "GitHub request timed out"
+      : "GitHub request failed",
+  });
+}
+
 module.exports = async function handler(request, response) {
-  response.setHeader("Cache-Control", "no-store");
+  const requestId = crypto.randomUUID();
+  setSecurityHeaders(response, requestId);
 
   if (request.method !== "POST") {
     response.setHeader("Allow", "POST");
-    return response.status(405).json({ error: "Method not allowed" });
+    return send(response, 405, requestId, { error: "Method not allowed" });
+  }
+
+  const contentLength = Number(request.headers["content-length"] || 0);
+  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+    return send(response, 413, requestId, { error: "Request body is too large" });
   }
 
   const triggerSecret = process.env.PILOT_TRIGGER_SECRET;
   const githubToken = process.env.PILOT_GITHUB_TOKEN;
-
   if (!triggerSecret || !githubToken) {
-    return response.status(503).json({ error: "Merge is not configured" });
+    return send(response, 503, requestId, { error: "Merge is not configured" });
   }
 
   const authorization = request.headers.authorization || "";
   const suppliedSecret = authorization.startsWith("Bearer ")
     ? authorization.slice(7)
     : "";
-
   if (!safeEqual(suppliedSecret, triggerSecret)) {
-    return response.status(401).json({ error: "Unauthorized" });
+    return send(response, 401, requestId, { error: "Unauthorized" });
   }
 
-  const rawNumber = readBody(request).pr_number;
-  const prNumber = Number(rawNumber);
-
+  const prNumber = Number(readBody(request).pr_number);
   if (!Number.isSafeInteger(prNumber) || prNumber < 1) {
-    return response.status(400).json({ error: "Invalid pull request number" });
+    return send(response, 400, requestId, {
+      error: "Invalid pull request number",
+    });
   }
 
   const owner = process.env.PILOT_GITHUB_OWNER || "pjmcveyroutalk";
   const repository = process.env.PILOT_GITHUB_REPO || "routalk-pilot";
-  const fullName = `${owner}/${repository}`;
-  const baseUrl = `https://api.github.com/repos/${fullName}`;
-  let pull = await github(`${baseUrl}/pulls/${prNumber}`, githubToken);
-
-  if (!pull.ok) {
-    return response.status(pull.status === 404 ? 404 : 502).json({
-      error: pull.status === 404 ? "Pull request not found" : "GitHub lookup failed",
+  if (!validRepositoryPart(owner) || !validRepositoryPart(repository)) {
+    return send(response, 503, requestId, {
+      error: "Merge repository configuration is invalid",
     });
   }
 
-  const pr = pull.data;
-  const headRef = String(pr.head?.ref || "");
+  const fullName = `${owner}/${repository}`;
+  const baseUrl = `${GITHUB_API}/repos/${fullName}`;
+  let pull = await github(`${baseUrl}/pulls/${prNumber}`, githubToken);
+  if (!pull.ok) {
+    if (pull.status === 404) {
+      return send(response, 404, requestId, { error: "Pull request not found" });
+    }
+    return upstreamFailure(response, requestId, "pull_lookup", pull);
+  }
 
+  const initial = pull.data;
+  const headRef = String(initial.head?.ref || "");
   if (
-    pr.state !== "open" ||
-    pr.base?.ref !== "main" ||
+    initial.state !== "open" ||
+    initial.base?.ref !== "main" ||
     !headRef.startsWith("chatgpt/") ||
-    pr.head?.repo?.full_name !== fullName
+    initial.head?.repo?.full_name !== fullName
   ) {
-    return response.status(409).json({
+    return send(response, 409, requestId, {
       error: "Pilot can only merge open chatgpt/* pull requests into main",
     });
   }
 
-  if (pr.draft) {
-    const ready = await github("https://api.github.com/graphql", githubToken, {
+  if (initial.draft) {
+    const ready = await github(`${GITHUB_API}/graphql`, githubToken, {
       method: "POST",
       body: JSON.stringify({
         query:
           "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{id,isDraft}}}",
-        variables: { id: pr.node_id },
+        variables: { id: initial.node_id },
       }),
     });
-
     if (!ready.ok || ready.data.errors) {
-      return response.status(502).json({ error: "Could not mark pull request ready" });
+      return upstreamFailure(response, requestId, "mark_ready", ready);
     }
-
     pull = await github(`${baseUrl}/pulls/${prNumber}`, githubToken);
+    if (!pull.ok) {
+      return upstreamFailure(response, requestId, "ready_pull_refresh", pull);
+    }
   }
 
   const current = pull.data;
+  const expectedHeadSha = String(current.head?.sha || "");
+  if (
+    current.state !== "open" ||
+    current.base?.ref !== "main" ||
+    current.head?.ref !== headRef ||
+    current.head?.repo?.full_name !== fullName ||
+    !/^[a-f0-9]{40}$/i.test(expectedHeadSha)
+  ) {
+    return send(response, 409, requestId, {
+      error: "Pull request changed during merge preparation",
+    });
+  }
 
   if (current.mergeable !== true || current.mergeable_state !== "clean") {
-    return response.status(409).json({
+    return send(response, 409, requestId, {
       error: "Pull request is not currently mergeable",
     });
   }
 
-  const checkRuns = await github(
-    `${baseUrl}/commits/${current.head.sha}/check-runs?per_page=100`,
-    githubToken,
-  );
-  const statuses = await github(
-    `${baseUrl}/commits/${current.head.sha}/status`,
-    githubToken,
-  );
-
-  if (!checkRuns.ok || !statuses.ok) {
-    return response.status(502).json({ error: "Could not verify pull request checks" });
+  const [checkRuns, statuses] = await Promise.all([
+    github(
+      `${baseUrl}/commits/${expectedHeadSha}/check-runs?per_page=100`,
+      githubToken,
+    ),
+    github(`${baseUrl}/commits/${expectedHeadSha}/status`, githubToken),
+  ]);
+  if (!checkRuns.ok) {
+    return upstreamFailure(response, requestId, "check_runs", checkRuns);
+  }
+  if (!statuses.ok) {
+    return upstreamFailure(response, requestId, "commit_status", statuses);
   }
 
   const allowedConclusions = new Set(["success", "neutral", "skipped"]);
@@ -140,22 +213,25 @@ module.exports = async function handler(request, response) {
   );
   const statusesBlocked = !["success", "pending"].includes(statuses.data.state)
     ? true
-    : statuses.data.state === "pending" && (statuses.data.statuses || []).length > 0;
-
+    : statuses.data.state === "pending" &&
+      (statuses.data.statuses || []).length > 0;
   if (checksBlocked || statusesBlocked) {
-    return response.status(409).json({
+    return send(response, 409, requestId, {
       error: "Pull request checks are pending or unsuccessful",
     });
   }
 
   const merge = await github(`${baseUrl}/pulls/${prNumber}/merge`, githubToken, {
     method: "PUT",
-    body: JSON.stringify({ merge_method: "squash" }),
+    body: JSON.stringify({ merge_method: "squash", sha: expectedHeadSha }),
   });
-
   if (!merge.ok || !merge.data.merged) {
-    return response.status(409).json({
-      error: merge.data.message || "GitHub did not merge the pull request",
+    console.warn("Pilot merge declined", {
+      request_id: requestId,
+      status: merge.status,
+    });
+    return send(response, 409, requestId, {
+      error: "GitHub did not merge the pull request",
     });
   }
 
@@ -165,12 +241,20 @@ module.exports = async function handler(request, response) {
     githubToken,
     { method: "DELETE" },
   );
+  const branchDeleted = deleted.ok || deleted.status === 404;
+  if (!branchDeleted) {
+    console.warn("Pilot merged but branch cleanup failed", {
+      request_id: requestId,
+      status: deleted.status,
+    });
+  }
 
-  return response.status(200).json({
+  return send(response, 200, requestId, {
     merged: true,
     number: prNumber,
     sha: merge.data.sha,
-    html_url: pr.html_url,
-    branch_deleted: deleted.ok || deleted.status === 404,
+    html_url: initial.html_url,
+    branch_deleted: branchDeleted,
+    warning: branchDeleted ? undefined : "Pull request merged; branch cleanup failed",
   });
 };
