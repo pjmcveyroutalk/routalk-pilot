@@ -310,7 +310,7 @@
         results.append(button);
       }
 
-      function addSummary(workflow, pullRequests) {
+      function addSummary(workflow, pullRequests, newPullRequestCount) {
         const summary = document.createElement("div");
         summary.className = "result-summary";
 
@@ -323,7 +323,7 @@
           ],
           [
             "New PRs",
-            String(pullRequests.length),
+            String(newPullRequestCount),
           ],
         ];
 
@@ -378,7 +378,9 @@
 
           results.replaceChildren();
           const pullRequests = result.pull_requests || [];
-          addSummary(result.workflow, pullRequests);
+          const newPullRequestCount =
+            result.new_pull_request_count ?? pullRequests.length;
+          addSummary(result.workflow, pullRequests, newPullRequestCount);
           addResultLink("Open workflow results", result.workflow.html_url);
 
           for (const pull of pullRequests) {
@@ -391,9 +393,11 @@
           }
 
           if (result.workflow.conclusion === "success") {
-            const prMessage = pullRequests.length
-              ? ` ${pullRequests.length} new pull request${pullRequests.length === 1 ? " is" : "s are"} ready below.`
-              : " No new pull request was created.";
+            const prMessage = newPullRequestCount
+              ? ` ${newPullRequestCount} new pull request${newPullRequestCount === 1 ? " is" : "s are"} ready below.`
+              : pullRequests.length
+                ? ` No new pull request was created. ${pullRequests.length} eligible open pull request${pullRequests.length === 1 ? " remains" : "s remain"} below.`
+                : " No new pull request was created.";
             showStatus(`Pilot finished successfully.${prMessage}`, "success");
           } else {
             showStatus(
