@@ -193,6 +193,32 @@
         font-size: 0.78rem;
         line-height: 1.4;
       }
+
+      .package-review {
+        margin-top: 16px;
+        padding: 14px;
+        border: 1px solid #385779;
+        border-radius: 14px;
+        background: #07101d;
+      }
+
+      .package-review[hidden] { display: none; }
+
+      .package-review h2 {
+        margin: 0 0 10px;
+        font-size: 1rem;
+      }
+
+      .package-review dl {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 6px 12px;
+        margin: 0;
+        font-size: 0.8rem;
+      }
+
+      .package-review dt { color: #8296b0; }
+      .package-review dd { margin: 0; overflow-wrap: anywhere; }
     </style>
   </head>
   <body>
@@ -233,6 +259,23 @@
         <p class="helper">
           Creates one harmless encrypted verification PR through the private queue.
         </p>
+        <input
+          class="sr-only"
+          id="package-file"
+          type="file"
+          accept="application/json,.json,.pilot"
+        />
+        <button id="package-file-button" class="secondary-button" type="button">
+          Import build package
+        </button>
+        <p class="helper">
+          Select a complete .json or .pilot package, review its scope, then submit it securely.
+        </p>
+        <section id="package-review" class="package-review" aria-live="polite" hidden>
+          <h2>Package review</h2>
+          <dl id="package-summary"></dl>
+          <button id="package-submit-button" type="button">Submit approved package</button>
+        </section>
       </form>
 
       <p id="status" role="status" aria-live="polite"></p>
@@ -247,8 +290,14 @@
       const secretInput = document.querySelector("#secret");
       const runButton = document.querySelector("#run-button");
       const queueTestButton = document.querySelector("#queue-test-button");
+      const packageFile = document.querySelector("#package-file");
+      const packageFileButton = document.querySelector("#package-file-button");
+      const packageReview = document.querySelector("#package-review");
+      const packageSummary = document.querySelector("#package-summary");
+      const packageSubmitButton = document.querySelector("#package-submit-button");
       const status = document.querySelector("#status");
       const results = document.querySelector("#results");
+      let approvedPackage = null;
 
       const wait = (milliseconds) =>
         new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -256,6 +305,93 @@
       function showStatus(message, state = "") {
         status.textContent = message;
         status.dataset.state = state;
+      }
+
+      function decodedBase64Size(value) {
+        if (
+          typeof value !== "string" ||
+          value.length % 4 !== 0 ||
+          !/^[A-Za-z0-9+/]*={0,2}$/.test(value)
+        ) {
+          throw new Error("A package file contains invalid encoded content.");
+        }
+        const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+        return Math.floor((value.length * 3) / 4) - padding;
+      }
+
+      function validatePackage(value) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          throw new Error("The selected file is not a Pilot package.");
+        }
+        if (value.version !== 1 || value.action !== "apply") {
+          throw new Error("Only version 1 apply packages are supported.");
+        }
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value.command_id || "")) {
+          throw new Error("The package command ID is invalid.");
+        }
+        if (
+          !/^chatgpt\/[A-Za-z0-9._/-]{1,120}$/.test(value.branch || "") ||
+          value.branch.includes("..") ||
+          value.branch.includes("//") ||
+          value.branch.endsWith("/")
+        ) {
+          throw new Error("The package branch is invalid.");
+        }
+        if (!Array.isArray(value.files) || value.files.length < 1 || value.files.length > 20) {
+          throw new Error("A package must contain 1 to 20 files.");
+        }
+
+        const paths = new Set();
+        let totalBytes = 0;
+        for (const file of value.files) {
+          const path = typeof file?.path === "string" ? file.path.replaceAll("\\", "/") : "";
+          const lowered = path.toLowerCase();
+          if (
+            !path ||
+            path.startsWith("/") ||
+            path.split("/").some((part) => !part || part === "." || part === "..") ||
+            lowered === ".git" ||
+            lowered.startsWith(".git/") ||
+            lowered.startsWith(".github/workflows/") ||
+            paths.has(path)
+          ) {
+            throw new Error(`Unsafe or duplicate package path: ${path || "(missing)"}`);
+          }
+          paths.add(path);
+          const fileBytes = decodedBase64Size(file.content_b64);
+          if (fileBytes > 32_000) throw new Error(`Package file is too large: ${path}`);
+          totalBytes += fileBytes;
+        }
+        if (totalBytes > 32_000) throw new Error("The combined package is too large.");
+
+        return { command: value, totalBytes, paths: [...paths] };
+      }
+
+      function showPackageReview(packageInfo) {
+        packageSummary.replaceChildren();
+        const rows = [
+          ["Command", packageInfo.command.command_id],
+          ["Branch", packageInfo.command.branch],
+          ["PR title", packageInfo.command.pr_title || "(not supplied)"],
+          ["Files", String(packageInfo.paths.length)],
+          ["Payload", `${packageInfo.totalBytes.toLocaleString()} bytes`],
+          ["Paths", packageInfo.paths.join(", ")],
+        ];
+        for (const [label, value] of rows) {
+          const term = document.createElement("dt");
+          term.textContent = label;
+          const detail = document.createElement("dd");
+          detail.textContent = value;
+          packageSummary.append(term, detail);
+        }
+        packageReview.hidden = false;
+      }
+
+      function setBusy(busy) {
+        runButton.disabled = busy;
+        queueTestButton.disabled = busy;
+        packageFileButton.disabled = busy;
+        packageSubmitButton.disabled = busy;
       }
 
       function addResultLink(label, url) {
@@ -474,6 +610,87 @@
           secret = "";
           runButton.disabled = false;
           runButton.textContent = "Run now";
+        }
+      });
+
+      packageFileButton.addEventListener("click", () => packageFile.click());
+
+      packageFile.addEventListener("change", async () => {
+        approvedPackage = null;
+        packageReview.hidden = true;
+        packageSummary.replaceChildren();
+
+        const file = packageFile.files?.[0];
+        if (!file) return;
+        if (file.size > 100_000) {
+          packageFile.value = "";
+          showStatus("The selected package is too large.", "error");
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(await file.text());
+          const packageInfo = validatePackage(parsed);
+          approvedPackage = packageInfo.command;
+          showPackageReview(packageInfo);
+          showStatus("Review the package scope below before submitting it.");
+        } catch (error) {
+          packageFile.value = "";
+          showStatus(error.message || "The selected package is invalid.", "error");
+        }
+      });
+
+      packageSubmitButton.addEventListener("click", async () => {
+        let secret = secretInput.value;
+        if (!approvedPackage) {
+          showStatus("Import and review a Pilot package first.", "error");
+          return;
+        }
+        if (!secret) {
+          showStatus("Enter the Pilot trigger secret.", "error");
+          return;
+        }
+
+        const startedAt = new Date().toISOString();
+        setBusy(true);
+        packageSubmitButton.textContent = "Encrypting and submitting…";
+        results.replaceChildren();
+        showStatus("Submitting the approved package through the encrypted queue…");
+
+        try {
+          const response = await fetch("/api/queue", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${secret}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(approvedPackage),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(result.error || `Package submission failed (${response.status})`);
+          }
+
+          secretInput.value = "";
+          approvedPackage = null;
+          packageFile.value = "";
+          packageReview.hidden = true;
+          showStatus("Package queued securely. Monitoring GitHub now…", "success");
+          packageSubmitButton.textContent = "Monitoring…";
+          const secretSession = {
+            value: secret,
+            expiresAt: Date.now() + 10 * 60 * 1000,
+          };
+          setTimeout(() => {
+            secretSession.value = "";
+          }, 10 * 60 * 1000);
+          await monitorPilot(secretSession, startedAt);
+        } catch (error) {
+          showStatus(error.message || "The build package could not be submitted.", "error");
+        } finally {
+          secret = "";
+          setBusy(false);
+          packageSubmitButton.textContent = "Submit approved package";
         }
       });
 
