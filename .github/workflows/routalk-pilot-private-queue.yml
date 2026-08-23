@@ -1,0 +1,106 @@
+name: Routalk Pilot Private Queue
+
+"on":
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Command source
+        required: false
+        default: pilot_queue
+        type: string
+      command_id:
+        description: Optional Pilot queue command id
+        required: false
+        type: string
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: routalk-pilot-private-queue
+  cancel-in-progress: false
+
+jobs:
+  process-queue:
+    runs-on: ubuntu-latest
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PILOT_QUEUE_SECRET: ${{ secrets.PILOT_QUEUE_SECRET }}
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Process encrypted Pilot queue
+        shell: bash
+        env:
+          REQUESTED_COMMAND_ID: ${{ inputs.command_id }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PILOT_QUEUE_SECRET:-}" ]; then
+            echo "PILOT_QUEUE_SECRET is not configured." >&2
+            exit 1
+          fi
+
+          if [ -n "${REQUESTED_COMMAND_ID:-}" ] && \
+             ! [[ "$REQUESTED_COMMAND_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; then
+            echo "Invalid Pilot queue command id." >&2
+            exit 1
+          fi
+
+          if [ -n "${REQUESTED_COMMAND_ID:-}" ]; then
+            QUEUE_RECORDS="$(
+              gh issue list \
+                --state open \
+                --limit 100 \
+                --json number,title |
+              jq --raw-output \
+                --arg command_id "$REQUESTED_COMMAND_ID" \
+                '.[] | select(.title == ("Pilot queue command " + $command_id)) | .number'
+            )"
+          else
+            QUEUE_RECORDS="$(
+              gh issue list \
+                --state open \
+                --limit 100 \
+                --json number,title \
+                --jq '.[] | select(.title | startswith("Pilot queue command ")) | .number'
+            )"
+          fi
+
+          if [ -z "$QUEUE_RECORDS" ]; then
+            echo "No encrypted Pilot queue commands found."
+            exit 0
+          fi
+
+          while IFS= read -r QUEUE_RECORD; do
+            [ -n "$QUEUE_RECORD" ] || continue
+
+            TEMP_FILE="$(mktemp /tmp/pilot-queue-XXXXXX.json)"
+            trap 'rm -f "$TEMP_FILE"' EXIT
+
+            gh issue view "$QUEUE_RECORD" --json body --jq '.body' > "$TEMP_FILE"
+
+            git reset --hard
+            git checkout main
+            git reset --hard origin/main
+
+            node scripts/process-pilot-queue.js "$TEMP_FILE"
+
+            gh issue close "$QUEUE_RECORD" \
+              --comment "Pilot processed this encrypted queue record successfully." \
+              >/dev/null
+
+            rm -f "$TEMP_FILE"
+            trap - EXIT
+            echo "Completed queue record #${QUEUE_RECORD}."
+          done <<< "$QUEUE_RECORDS"
