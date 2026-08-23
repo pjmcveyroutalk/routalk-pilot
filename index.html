@@ -90,6 +90,13 @@
 
       button:disabled { cursor: wait; opacity: 0.65; }
 
+      .secondary-button {
+        min-height: 48px;
+        border: 1px solid #6fe7d2;
+        background: transparent;
+        color: #6fe7d2;
+      }
+
       #status {
         min-height: 24px;
         margin: 16px 0 0;
@@ -220,6 +227,12 @@
           Use the saved Pilot trigger password, not a GitHub token.
         </p>
         <button id="run-button" type="submit">Run now</button>
+        <button id="queue-test-button" class="secondary-button" type="button">
+          Verify private queue
+        </button>
+        <p class="helper">
+          Creates one harmless encrypted verification PR through the private queue.
+        </p>
       </form>
 
       <p id="status" role="status" aria-live="polite"></p>
@@ -233,6 +246,7 @@
       const form = document.querySelector("#dispatch-form");
       const secretInput = document.querySelector("#secret");
       const runButton = document.querySelector("#run-button");
+      const queueTestButton = document.querySelector("#queue-test-button");
       const status = document.querySelector("#status");
       const results = document.querySelector("#results");
 
@@ -460,6 +474,79 @@
           secret = "";
           runButton.disabled = false;
           runButton.textContent = "Run now";
+        }
+      });
+
+      queueTestButton.addEventListener("click", async () => {
+        let secret = secretInput.value;
+
+        if (!secret) {
+          showStatus("Enter the Pilot trigger secret.", "error");
+          return;
+        }
+
+        const startedAt = new Date().toISOString();
+        const commandId = `pilot-private-queue-check-${Date.now()}`;
+        const verificationText = [
+          "Routalk Pilot private queue verification",
+          `Created: ${startedAt}`,
+          `Command: ${commandId}`,
+          "",
+        ].join("\n");
+
+        runButton.disabled = true;
+        queueTestButton.disabled = true;
+        queueTestButton.textContent = "Queueing…";
+        results.replaceChildren();
+        showStatus("Encrypting and queueing the verification command…");
+
+        try {
+          const response = await fetch("/api/queue", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${secret}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              command_id: commandId,
+              action: "apply",
+              branch: `chatgpt/${commandId}`,
+              files: [
+                {
+                  path: "pilot-private-queue-check.txt",
+                  content_b64: btoa(verificationText),
+                },
+              ],
+              commit_message: "Verify Routalk Pilot private queue",
+              pr_title: "Verify Routalk Pilot private queue",
+              pr_body:
+                "Harmless end-to-end verification of the authenticated encrypted Pilot queue.",
+            }),
+          });
+          const result = await response.json().catch(() => ({}));
+
+          if (!response.ok) {
+            throw new Error(result.error || `Queue request failed (${response.status})`);
+          }
+
+          secretInput.value = "";
+          showStatus("Verification queued. Monitoring GitHub now…", "success");
+          queueTestButton.textContent = "Monitoring…";
+          const secretSession = {
+            value: secret,
+            expiresAt: Date.now() + 10 * 60 * 1000,
+          };
+          setTimeout(() => {
+            secretSession.value = "";
+          }, 10 * 60 * 1000);
+          await monitorPilot(secretSession, startedAt);
+        } catch (error) {
+          showStatus(error.message || "Private queue verification failed.", "error");
+        } finally {
+          secret = "";
+          runButton.disabled = false;
+          queueTestButton.disabled = false;
+          queueTestButton.textContent = "Verify private queue";
         }
       });
     </script>
