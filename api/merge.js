@@ -346,12 +346,15 @@ module.exports = async function handler(request, response) {
       github_message: githubMessage,
     });
 
+    const denialStatus = merge?.status || 0;
+    const denialSummary = `GitHub merge denied (${denialStatus}): ${githubMessage}`;
+
     return send(response, 409, requestId, {
-      error: "GitHub did not merge the pull request",
+      error: denialSummary,
       retryable: [405, 409].includes(merge?.status),
       denial: {
         source: "github_merge_api",
-        status: merge?.status || 0,
+        status: denialStatus,
         message: githubMessage,
       },
     });
