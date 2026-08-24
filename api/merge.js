@@ -5,6 +5,8 @@ const GITHUB_TIMEOUT_MS = 10_000;
 const MAX_BODY_BYTES = 4_096;
 const MERGEABILITY_RETRIES = 4;
 const MERGEABILITY_RETRY_MS = 750;
+const MERGE_ATTEMPTS = 4;
+const MERGE_RETRY_MS = 1000;
 
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(left || "");
@@ -290,19 +292,68 @@ module.exports = async function handler(request, response) {
     });
   }
 
-  const merge = await github(`${baseUrl}/pulls/${prNumber}/merge`, githubToken, {
-    method: "PUT",
-    body: JSON.stringify({ merge_method: "squash", sha: expectedHeadSha }),
-  });
+  let merge = null;
 
-  if (!merge.ok || !merge.data.merged) {
+  for (let attempt = 0; attempt < MERGE_ATTEMPTS; attempt += 1) {
+    merge = await github(`${baseUrl}/pulls/${prNumber}/merge`, githubToken, {
+      method: "PUT",
+      body: JSON.stringify({ merge_method: "squash", sha: expectedHeadSha }),
+    });
+
+    if (merge.ok && merge.data.merged) break;
+
+    const retryableMergeStatus = [405, 409].includes(merge.status);
+    if (!retryableMergeStatus || attempt === MERGE_ATTEMPTS - 1) break;
+
+    await wait(MERGE_RETRY_MS);
+
+    const refreshed = await github(`${baseUrl}/pulls/${prNumber}`, githubToken);
+    if (!refreshed.ok) {
+      return upstreamFailure(response, requestId, "merge_retry_refresh", refreshed);
+    }
+
+    if (refreshed.data.state !== "open") {
+      if (refreshed.data.merged) {
+        return send(response, 200, requestId, {
+          merged: true,
+          number: prNumber,
+          sha: refreshed.data.merge_commit_sha || null,
+          html_url: refreshed.data.html_url,
+          branch_deleted: false,
+          warning: "Pull request merged while Pilot was confirming the result",
+        });
+      }
+      break;
+    }
+
+    if (String(refreshed.data.head?.sha || "") !== expectedHeadSha) {
+      return send(response, 409, requestId, {
+        error: "Pull request changed while Pilot was retrying the merge",
+        retryable: false,
+      });
+    }
+  }
+
+  if (!merge?.ok || !merge?.data?.merged) {
+    const githubMessage =
+      typeof merge?.data?.message === "string"
+        ? merge.data.message.slice(0, 240)
+        : "GitHub declined the merge";
+
     console.warn("Pilot merge declined", {
       request_id: requestId,
-      status: merge.status,
+      status: merge?.status,
+      github_message: githubMessage,
     });
+
     return send(response, 409, requestId, {
       error: "GitHub did not merge the pull request",
-      retryable: true,
+      retryable: [405, 409].includes(merge?.status),
+      denial: {
+        source: "github_merge_api",
+        status: merge?.status || 0,
+        message: githubMessage,
+      },
     });
   }
 
