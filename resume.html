@@ -1,74 +1,10 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#09111f">
-<title>Resume Pilot Command</title>
-<style>
-:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;background:#09111f;color:#f4f7fb}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top,#173156 0,transparent 42%),#09111f}
-main{width:min(100%,440px);padding:28px;border:1px solid #294467;border-radius:24px;background:rgba(12,24,42,.94)}
-.eyebrow{margin:0 0 8px;color:#6fe7d2;font-size:.78rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
-h1{margin:0;font-size:2rem}p{color:#b8c7db;line-height:1.5}label{display:block;margin:16px 0 8px;font-size:.9rem;font-weight:800}
-input{width:100%;min-height:50px;padding:12px 14px;border:1px solid #385779;border-radius:12px;background:#07101d;color:#fff;font:inherit}
-button,a.button{display:block;width:100%;min-height:52px;margin-top:16px;padding:14px;border:0;border-radius:14px;background:#6fe7d2;color:#06131d;font:inherit;font-weight:900;text-align:center;text-decoration:none}
-#status{margin-top:18px;color:#b8c7db}#status[data-state=success]{color:#7cf2bd}#status[data-state=error]{color:#ff9a9a}
-.card{margin-top:16px;padding:14px;border:1px solid #294467;border-radius:14px;background:#07101d}.row{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px;margin:6px 0}
-.key{color:#8296b0}.value{overflow-wrap:anywhere}.secondary{background:transparent!important;color:#6fe7d2!important;border:1px solid #6fe7d2!important}
-.helper{font-size:.8rem;color:#8296b0}
-</style>
-</head>
-<body>
-<main>
-<p class="eyebrow">Mobile recovery</p>
-<h1>Resume Pilot command</h1>
-<p>Recover a submitted command after a reload, browser close, or device switch. Pilot stores only the last command ID locally, never your trigger secret.</p>
-<label for="command-id">Command ID</label>
-<input id="command-id" autocomplete="off">
-<p id="last-command-note" class="helper" hidden></p>
-<label for="secret">Pilot trigger secret</label>
-<input id="secret" type="password" autocomplete="current-password">
-<button id="resume-button" type="button">Resume command</button>
-<p id="status" role="status" aria-live="polite"></p>
-<section id="details" class="card" hidden></section>
-<a class="button secondary" href="/">Back to Pilot</a>
-</main>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#09111f"><title>Resume Pilot Command</title>
+<style>:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;background:#09111f;color:#f4f7fb}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top,#173156 0,transparent 42%),#09111f}main{width:min(100%,440px);padding:28px;border:1px solid #294467;border-radius:24px;background:rgba(12,24,42,.94)}.eyebrow{margin:0 0 8px;color:#6fe7d2;font-size:.78rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase}h1{margin:0;font-size:2rem}p{color:#b8c7db;line-height:1.5}label{display:block;margin:16px 0 8px;font-size:.9rem;font-weight:800}input{width:100%;min-height:50px;padding:12px 14px;border:1px solid #385779;border-radius:12px;background:#07101d;color:#fff;font:inherit}button,a.button{display:block;width:100%;min-height:52px;margin-top:16px;padding:14px;border:0;border-radius:14px;background:#6fe7d2;color:#06131d;font:inherit;font-weight:900;text-align:center;text-decoration:none;cursor:pointer}button:disabled{cursor:wait;opacity:.65}#status{margin-top:18px;color:#b8c7db}#status[data-state=success]{color:#7cf2bd}#status[data-state=error]{color:#ff9a9a}.card{margin-top:16px;padding:14px;border:1px solid #294467;border-radius:14px;background:#07101d}.row{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px;margin:6px 0}.key{color:#8296b0}.value{overflow-wrap:anywhere}.secondary{background:transparent!important;color:#6fe7d2!important;border:1px solid #6fe7d2!important}.helper{font-size:.8rem;color:#8296b0}</style></head>
+<body><main><p class="eyebrow">Mobile recovery</p><h1>Resume Pilot command</h1><p>Recover a submitted command after a reload, browser close, or device switch. Pilot stores only the last command ID locally, never your trigger secret.</p><label for="command-id">Command ID</label><input id="command-id" autocomplete="off"><p id="last-command-note" class="helper" hidden></p><label for="secret">Pilot trigger secret</label><input id="secret" type="password" autocomplete="current-password"><button id="resume-button" type="button">Resume command</button><p id="status" role="status" aria-live="polite"></p><section id="details" class="card" hidden></section><a class="button secondary" href="/">Back to Pilot</a></main>
 <script>
-const commandInput=document.querySelector("#command-id");
-const secretInput=document.querySelector("#secret");
-const resumeButton=document.querySelector("#resume-button");
-const status=document.querySelector("#status");
-const details=document.querySelector("#details");
-const note=document.querySelector("#last-command-note");
-let ephemeralSecret="";
-let pollTimer=null;
-const queryCommand=new URLSearchParams(location.search).get("command_id");
-const savedCommand=localStorage.getItem("pilot:last-command-id");
-if(queryCommand){commandInput.value=queryCommand}
-else if(savedCommand){commandInput.value=savedCommand;note.textContent="Recovered the last command ID saved on this device.";note.hidden=false}
-function showStatus(message,state=""){status.textContent=message;status.dataset.state=state}
-function row(label,value){const w=document.createElement("div");w.className="row";const k=document.createElement("span");k.className="key";k.textContent=label;const v=document.createElement("strong");v.className="value";v.textContent=value??"—";w.append(k,v);details.append(w)}
-async function lookup(){
- const commandId=commandInput.value.trim();let secret=secretInput.value||ephemeralSecret;
- if(!commandId||!secret){showStatus("Enter the command ID and Pilot trigger secret.","error");return}
- if(pollTimer){clearTimeout(pollTimer);pollTimer=null}
- resumeButton.disabled=true;resumeButton.textContent="Checking…";details.hidden=true;details.replaceChildren();showStatus("Recovering Pilot command state…");
- try{
-  const response=await fetch(`/api/command?command_id=${encodeURIComponent(commandId)}`,{method:"GET",headers:{Authorization:`Bearer ${secret}`},cache:"no-store"});
-  const result=await response.json().catch(()=>({}));if(!response.ok)throw new Error(result.error||`Lookup failed (${response.status})`);
-  ephemeralSecret=secret;localStorage.setItem("pilot:last-command-id",result.command_id);secretInput.value="";
-  row("Command",result.command_id);row("State",result.state);row("Storage",result.storage?.adapter);row("Processed",String(Boolean(result.storage?.processed)));row("PR",result.pull_request?`#${result.pull_request.number}`:"None");row("PR state",result.pull_request?.state||"—");row("Merged",result.pull_request?String(Boolean(result.pull_request.merged)):"—");details.hidden=false;
-  if(result.pull_request?.html_url){const link=document.createElement("a");link.className="button secondary";link.href=result.pull_request.html_url;link.target="_blank";link.rel="noopener noreferrer";link.textContent=`Open PR #${result.pull_request.number}`;details.append(link)}
-  showStatus(`Command recovered: ${result.state}.`,"success");
-  if(["QUEUED","DISPATCHING","RUNNING"].includes(result.state)){
-    showStatus(`Command recovered: ${result.state}. Refreshing automatically…`,"success");
-    pollTimer=setTimeout(lookup,4000);
-  }
- }catch(error){ephemeralSecret="";showStatus(error.message||"Command could not be recovered.","error")}
- finally{secret="";resumeButton.disabled=false;resumeButton.textContent="Resume command"}
-}
-resumeButton.addEventListener("click",lookup);
-</script>
-</body>
-</html>
+const commandInput=document.querySelector("#command-id"),secretInput=document.querySelector("#secret"),resumeButton=document.querySelector("#resume-button"),status=document.querySelector("#status"),details=document.querySelector("#details"),note=document.querySelector("#last-command-note");let ephemeralSecret="",pollTimer=null;const queryCommand=new URLSearchParams(location.search).get("command_id"),savedCommand=localStorage.getItem("pilot:last-command-id");if(queryCommand){commandInput.value=queryCommand}else if(savedCommand){commandInput.value=savedCommand;note.textContent="Recovered the last command ID saved on this device.";note.hidden=false}function showStatus(message,state=""){status.textContent=message;status.dataset.state=state}function row(label,value){const w=document.createElement("div");w.className="row";const k=document.createElement("span");k.className="key";k.textContent=label;const v=document.createElement("strong");v.className="value";v.textContent=value??"—";w.append(k,v);details.append(w)}
+function addMergeButton(pull){const button=document.createElement("button");button.type="button";button.className="secondary";button.textContent=`Merge PR #${pull.number}`;button.addEventListener("click",async()=>{if(!ephemeralSecret){showStatus("Merge session expired. Resume the command again.","error");return}if(!confirm(`Merge PR #${pull.number} into main and delete its branch?`))return;button.disabled=true;button.textContent="Merging…";showStatus(`Validating and merging PR #${pull.number}…`);try{const response=await fetch("/api/merge",{method:"POST",headers:{Authorization:`Bearer ${ephemeralSecret}`,"Content-Type":"application/json"},body:JSON.stringify({pr_number:pull.number})});const result=await response.json().catch(()=>({}));if(!response.ok)throw new Error(result.error||`Merge failed (${response.status})`);button.textContent=`PR #${pull.number} merged`;showStatus(`PR #${pull.number} merged successfully${result.branch_deleted?" and its branch was deleted":""}.`,"success");pollTimer=setTimeout(lookup,1500)}catch(error){button.disabled=false;button.textContent=`Retry merge PR #${pull.number}`;showStatus(error.message||"Pull request could not be merged.","error")}});details.append(button)}
+async function lookup(){const commandId=commandInput.value.trim();let secret=secretInput.value||ephemeralSecret;if(!commandId||!secret){showStatus("Enter the command ID and Pilot trigger secret.","error");return}if(pollTimer){clearTimeout(pollTimer);pollTimer=null}resumeButton.disabled=true;resumeButton.textContent="Checking…";details.hidden=true;details.replaceChildren();showStatus("Recovering Pilot command state…");try{const response=await fetch(`/api/command?command_id=${encodeURIComponent(commandId)}`,{method:"GET",headers:{Authorization:`Bearer ${secret}`},cache:"no-store"});const result=await response.json().catch(()=>({}));if(!response.ok)throw new Error(result.error||`Lookup failed (${response.status})`);ephemeralSecret=secret;localStorage.setItem("pilot:last-command-id",result.command_id);secretInput.value="";row("Command",result.command_id);row("State",result.state);row("Storage",result.storage?.adapter);row("Processed",String(Boolean(result.storage?.processed)));row("PR",result.pull_request?`#${result.pull_request.number}`:"None");row("PR state",result.pull_request?.state||"—");row("Merged",result.pull_request?String(Boolean(result.pull_request.merged)):"—");details.hidden=false;if(result.pull_request?.html_url){const link=document.createElement("a");link.className="button secondary";link.href=result.pull_request.html_url;link.target="_blank";link.rel="noopener noreferrer";link.textContent=`Open PR #${result.pull_request.number}`;details.append(link)}if(result.state==="AWAITING_APPROVAL"&&result.pull_request&&!result.pull_request.merged)addMergeButton(result.pull_request);showStatus(`Command recovered: ${result.state}.`,"success");if(["QUEUED","DISPATCHING","RUNNING"].includes(result.state)){showStatus(`Command recovered: ${result.state}. Refreshing automatically…`,"success");pollTimer=setTimeout(lookup,4000)}}catch(error){ephemeralSecret="";showStatus(error.message||"Command could not be recovered.","error")}finally{secret="";resumeButton.disabled=false;resumeButton.textContent="Resume command"}}resumeButton.addEventListener("click",lookup);
+</script></body></html>
