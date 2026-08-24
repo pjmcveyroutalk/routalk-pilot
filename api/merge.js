@@ -335,6 +335,25 @@ module.exports = async function handler(request, response) {
   }
 
   if (!merge?.ok || !merge?.data?.merged) {
+    // A merge request can race with GitHub's state propagation: the PUT may
+    // return a denial while the PR becomes merged immediately afterward.
+    // Reconcile against the authoritative PR record before telling the phone
+    // that the merge failed.
+    await wait(MERGE_RETRY_MS);
+    const reconciled = await github(`${baseUrl}/pulls/${prNumber}`, githubToken);
+
+    if (reconciled.ok && reconciled.data.merged) {
+      return send(response, 200, requestId, {
+        merged: true,
+        number: prNumber,
+        sha: reconciled.data.merge_commit_sha || null,
+        html_url: reconciled.data.html_url || initial.html_url,
+        branch_deleted: false,
+        warning: "Merge completed while Pilot was reconciling GitHub state",
+        reconciled: true,
+      });
+    }
+
     const githubMessage =
       typeof merge?.data?.message === "string"
         ? merge.data.message.slice(0, 240)
@@ -344,6 +363,7 @@ module.exports = async function handler(request, response) {
       request_id: requestId,
       status: merge?.status,
       github_message: githubMessage,
+      reconciliation_status: reconciled?.status,
     });
 
     const denialStatus = merge?.status || 0;
