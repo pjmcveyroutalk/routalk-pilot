@@ -242,15 +242,27 @@ module.exports = async function handler(request, response) {
       check.status !== "completed" || !allowedConclusions.has(check.conclusion),
   );
 
-  const statusesBlocked = !["success", "pending"].includes(statuses.data.state)
-    ? true
-    : statuses.data.state === "pending" &&
-      (statuses.data.statuses || []).length > 0;
+  const commitStatuses = statuses.data.statuses || [];
+  const failingCommitStatuses = commitStatuses.filter((status) =>
+    ["error", "failure"].includes(status.state),
+  );
+  const pendingCommitStatuses = commitStatuses.filter(
+    (status) => status.state === "pending",
+  );
 
-  if (checksBlocked || statusesBlocked) {
+  // GitHub's combined status can temporarily remain "pending" even after all
+  // reported provider contexts have succeeded. Gate on the individual contexts
+  // we actually received instead of treating the aggregate cache as authoritative.
+  const statusesBlocked = failingCommitStatuses.length > 0;
+  const statusesPending = pendingCommitStatuses.length > 0;
+
+  if (checksBlocked || statusesBlocked || statusesPending) {
     return send(response, 409, requestId, {
-      error: "Pull request checks are pending or unsuccessful",
-      retryable: statuses.data.state === "pending",
+      error:
+        statusesBlocked || checksBlocked
+          ? "Pull request checks are unsuccessful"
+          : "Pull request checks are still pending",
+      retryable: !statusesBlocked,
     });
   }
 
