@@ -302,7 +302,44 @@
       const resumeLastButton = document.querySelector("#resume-last-button");
       const status = document.querySelector("#status");
       const results = document.querySelector("#results");
+      const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v1";
       let approvedPackage = null;
+
+      function rememberPendingPackage(command) {
+        try {
+          sessionStorage.setItem(PENDING_PACKAGE_KEY, JSON.stringify(command));
+        } catch {
+          // Package persistence is convenience-only. Submission remains available
+          // in the current page even if browser session storage is unavailable.
+        }
+      }
+
+      function clearPendingPackage() {
+        try {
+          sessionStorage.removeItem(PENDING_PACKAGE_KEY);
+        } catch {
+          // Ignore storage cleanup failures.
+        }
+      }
+
+      function restorePendingPackage() {
+        let stored = "";
+        try {
+          stored = sessionStorage.getItem(PENDING_PACKAGE_KEY) || "";
+        } catch {
+          return;
+        }
+        if (!stored) return;
+
+        try {
+          const packageInfo = validatePackage(JSON.parse(stored));
+          approvedPackage = packageInfo.command;
+          showPackageReview(packageInfo);
+          showStatus("Recovered the package you were reviewing. Confirm it before submitting.");
+        } catch {
+          clearPendingPackage();
+        }
+      }
 
       const lastCommandId = window.PilotRecovery?.readLastCommandId?.();
       if (lastCommandId) {
@@ -401,6 +438,8 @@
         }
         packageReview.hidden = false;
       }
+
+      restorePendingPackage();
 
       function setBusy(busy) {
         runButton.disabled = busy;
@@ -632,6 +671,7 @@
 
       packageFile.addEventListener("change", async () => {
         approvedPackage = null;
+        clearPendingPackage();
         packageReview.hidden = true;
         packageSummary.replaceChildren();
 
@@ -647,6 +687,7 @@
           const parsed = JSON.parse(await file.text());
           const packageInfo = validatePackage(parsed);
           approvedPackage = packageInfo.command;
+          rememberPendingPackage(approvedPackage);
           showPackageReview(packageInfo);
           showStatus("Review the package scope below before submitting it.");
         } catch (error) {
@@ -692,6 +733,7 @@
 
           secretInput.value = "";
           approvedPackage = null;
+          clearPendingPackage();
           packageFile.value = "";
           packageReview.hidden = true;
           showStatus("Package queued securely. Monitoring GitHub now…", "success");
