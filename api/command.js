@@ -53,11 +53,7 @@ async function github(url, token, options = {}) {
     const data = await result.json().catch(() => ({}));
     return { ok: result.ok, status: result.status, data };
   } catch (error) {
-    return {
-      ok: false,
-      status: 0,
-      timedOut: error?.name === "AbortError",
-    };
+    return { ok: false, status: 0, timedOut: error?.name === "AbortError" };
   } finally {
     clearTimeout(timeout);
   }
@@ -65,23 +61,10 @@ async function github(url, token, options = {}) {
 
 function deriveState(queueRecord, pullRequest) {
   if (!queueRecord) return null;
-
-  if (queueRecord.state === "open") {
-    return COMMAND_STATES.QUEUED;
-  }
-
-  if (!pullRequest) {
-    return COMMAND_STATES.COMPLETED;
-  }
-
-  if (pullRequest.merged_at) {
-    return COMMAND_STATES.MERGED;
-  }
-
-  if (pullRequest.state === "open") {
-    return COMMAND_STATES.AWAITING_APPROVAL;
-  }
-
+  if (queueRecord.state === "open") return COMMAND_STATES.QUEUED;
+  if (!pullRequest) return COMMAND_STATES.RUNNING;
+  if (pullRequest.merged_at) return COMMAND_STATES.MERGED;
+  if (pullRequest.state === "open") return COMMAND_STATES.AWAITING_APPROVAL;
   return COMMAND_STATES.COMPLETED;
 }
 
@@ -91,30 +74,19 @@ module.exports = async function handler(request, response) {
 
   if (request.method !== "GET") {
     response.setHeader("Allow", "GET");
-    return response.status(405).json({
-      error: "Method not allowed",
-      request_id: requestId,
-    });
+    return response.status(405).json({ error: "Method not allowed", request_id: requestId });
   }
 
   const triggerSecret = process.env.PILOT_TRIGGER_SECRET;
   const githubToken = process.env.PILOT_GITHUB_TOKEN;
   if (!triggerSecret || !githubToken) {
-    return response.status(503).json({
-      error: "Command lookup is not configured",
-      request_id: requestId,
-    });
+    return response.status(503).json({ error: "Command lookup is not configured", request_id: requestId });
   }
 
   const authorization = request.headers.authorization || "";
-  const suppliedSecret = authorization.startsWith("Bearer ")
-    ? authorization.slice(7)
-    : "";
+  const suppliedSecret = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   if (!safeEqual(suppliedSecret, triggerSecret)) {
-    return response.status(401).json({
-      error: "Unauthorized",
-      request_id: requestId,
-    });
+    return response.status(401).json({ error: "Unauthorized", request_id: requestId });
   }
 
   const commandIdValue = Array.isArray(request.query.command_id)
@@ -122,27 +94,17 @@ module.exports = async function handler(request, response) {
     : request.query.command_id;
   const commandId = typeof commandIdValue === "string" ? commandIdValue : "";
   if (!validCommandId(commandId)) {
-    return response.status(400).json({
-      error: "Invalid command_id",
-      request_id: requestId,
-    });
+    return response.status(400).json({ error: "Invalid command_id", request_id: requestId });
   }
 
   const owner = process.env.PILOT_GITHUB_OWNER || "pjmcveyroutalk";
   const repository = process.env.PILOT_GITHUB_REPO || "routalk-pilot";
   if (!validRepositoryPart(owner) || !validRepositoryPart(repository)) {
-    return response.status(503).json({
-      error: "Command lookup configuration is invalid",
-      request_id: requestId,
-    });
+    return response.status(503).json({ error: "Command lookup configuration is invalid", request_id: requestId });
   }
 
   const baseUrl = `${GITHUB_API}/repos/${owner}/${repository}`;
-  const store = createGithubIssueCommandStore({
-    baseUrl,
-    githubToken,
-    githubRequest: github,
-  });
+  const store = createGithubIssueCommandStore({ baseUrl, githubToken, githubRequest: github });
 
   let queueRecord;
   let pullRequest;
@@ -152,10 +114,7 @@ module.exports = async function handler(request, response) {
       store.findPullRequestByCommandId(commandId),
     ]);
   } catch (error) {
-    console.error("Pilot command lookup failed", {
-      requestId,
-      code: error.code,
-    });
+    console.error("Pilot command lookup failed", { requestId, code: error.code });
     return response.status(error.timedOut ? 504 : 502).json({
       error: error.message || "Command lookup failed",
       request_id: requestId,
@@ -198,7 +157,4 @@ module.exports = async function handler(request, response) {
   });
 };
 
-module.exports._test = {
-  deriveState,
-  validCommandId,
-};
+module.exports._test = { deriveState, validCommandId };
