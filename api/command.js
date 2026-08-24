@@ -6,6 +6,7 @@ const {
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10_000;
+const PRODUCTION_VERIFY_TIMEOUT_MS = 8_000;
 
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(left || "");
@@ -59,11 +60,53 @@ async function github(url, token, options = {}) {
   }
 }
 
-function deriveState(queueRecord, pullRequest) {
+async function verifyProduction(request, triggerSecret) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PRODUCTION_VERIFY_TIMEOUT_MS);
+
+  try {
+    const protocol = request.headers["x-forwarded-proto"] || "https";
+    const host = request.headers["x-forwarded-host"] || request.headers.host;
+    const target = `${protocol}://${host}/api/verify-production`;
+
+    const result = await fetch(target, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${triggerSecret}` },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const data = await result.json().catch(() => ({}));
+
+    return {
+      checked: true,
+      ready: result.ok && data.state === "READY",
+      state: data.state || (result.ok ? "UNKNOWN" : "FAILED"),
+      http_status: result.status,
+      verified_at: data.verified_at || new Date().toISOString(),
+    };
+  } catch (error) {
+    return {
+      checked: true,
+      ready: false,
+      state: error?.name === "AbortError" ? "TIMEOUT" : "FAILED",
+      verified_at: new Date().toISOString(),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function deriveState(queueRecord, pullRequest, productionVerification = null) {
   if (!queueRecord) return null;
   if (queueRecord.state === "open") return COMMAND_STATES.QUEUED;
   if (!pullRequest) return COMMAND_STATES.RUNNING;
-  if (pullRequest.merged_at) return COMMAND_STATES.MERGED;
+
+  if (pullRequest.merged_at) {
+    return productionVerification?.ready
+      ? COMMAND_STATES.COMPLETED
+      : COMMAND_STATES.MERGED;
+  }
+
   if (pullRequest.state === "open") return COMMAND_STATES.AWAITING_APPROVAL;
   return COMMAND_STATES.COMPLETED;
 }
@@ -129,7 +172,12 @@ module.exports = async function handler(request, response) {
     });
   }
 
-  const state = deriveState(queueRecord, pullRequest);
+  let productionVerification = null;
+  if (pullRequest?.merged_at) {
+    productionVerification = await verifyProduction(request, triggerSecret);
+  }
+
+  const state = deriveState(queueRecord, pullRequest, productionVerification);
 
   return response.status(200).json({
     command_id: commandId,
@@ -153,6 +201,7 @@ module.exports = async function handler(request, response) {
           updated_at: pullRequest.updated_at,
         }
       : null,
+    production_verification: productionVerification,
     request_id: requestId,
   });
 };
