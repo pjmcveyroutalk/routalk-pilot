@@ -278,6 +278,9 @@
           <h2>Package review</h2>
           <dl id="package-summary"></dl>
           <button id="package-submit-button" type="button">Submit approved package</button>
+          <button id="package-recovery-test-button" class="secondary-button" type="button">
+            Test recovery navigation
+          </button>
         </section>
       </form>
 
@@ -299,6 +302,7 @@
       const packageReview = document.querySelector("#package-review");
       const packageSummary = document.querySelector("#package-summary");
       const packageSubmitButton = document.querySelector("#package-submit-button");
+      const packageRecoveryTestButton = document.querySelector("#package-recovery-test-button");
       const resumeLastButton = document.querySelector("#resume-last-button");
       const status = document.querySelector("#status");
       const results = document.querySelector("#results");
@@ -348,6 +352,14 @@
       }
 
       resumeLastButton.addEventListener("click", () => {
+        location.href = window.PilotRecovery?.resumeUrl?.() || "/resume.html";
+      });
+
+      packageRecoveryTestButton.addEventListener("click", () => {
+        if (!approvedPackage) {
+          showStatus("Import and review a Pilot package first.", "error");
+          return;
+        }
         location.href = window.PilotRecovery?.resumeUrl?.() || "/resume.html";
       });
 
@@ -446,6 +458,7 @@
         queueTestButton.disabled = busy;
         packageFileButton.disabled = busy;
         packageSubmitButton.disabled = busy;
+        packageRecoveryTestButton.disabled = busy;
       }
 
       function addResultLink(label, url) {
