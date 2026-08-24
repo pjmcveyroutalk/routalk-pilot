@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { workflowToCommandState } = require("../lib/command-state");
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10000;
@@ -183,8 +184,11 @@ module.exports = async function handler(request, response) {
   );
 
   if (!run) {
+    const commandState = workflowToCommandState(null, newPullRequestCount);
     return response.status(200).json({
       workflow: null,
+      state: commandState,
+      state_source: "pilot_command_model",
       pull_requests: pullRequests,
       new_pull_request_count: newPullRequestCount,
       request_id: requestId,
@@ -198,9 +202,12 @@ module.exports = async function handler(request, response) {
     created_at: run.created_at,
     updated_at: run.updated_at,
   };
+  const commandState = workflowToCommandState(workflowResult, newPullRequestCount);
 
   return response.status(200).json({
     workflow: workflowResult,
+    state: commandState,
+    state_source: "pilot_command_model",
     pull_requests: pullRequests,
     new_pull_request_count: newPullRequestCount,
     request_id: requestId,

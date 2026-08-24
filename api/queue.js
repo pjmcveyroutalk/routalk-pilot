@@ -1,4 +1,9 @@
 const crypto = require("node:crypto");
+const {
+  COMMAND_STATES,
+  createCommandStoreAdapter,
+  transitionCommandRecord,
+} = require("../lib/command-state");
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10_000;
@@ -198,6 +203,56 @@ async function github(url, token, options = {}) {
   }
 }
 
+function githubIssueStore({ baseUrl, githubToken }) {
+  return {
+    name: "github_issues",
+
+    async findByCommandId(commandId) {
+      const queueTitle = `${QUEUE_TITLE_PREFIX}${commandId}`;
+      const existing = await github(`${baseUrl}/issues?state=all&per_page=100`, githubToken);
+      if (!existing.ok) {
+        const error = new Error("Pilot queue storage is unavailable");
+        error.code = "STORAGE_UNAVAILABLE";
+        error.timedOut = existing.timedOut;
+        throw error;
+      }
+      return (existing.data || []).find(
+        (issue) => !issue.pull_request && issue.title === queueTitle,
+      ) || null;
+    },
+
+    async persist(command, encryptedEnvelope) {
+      const issueBody = JSON.stringify(encryptedEnvelope);
+      if (issueBody.length > MAX_ISSUE_BODY_CHARS) {
+        const error = new Error("Encrypted command is too large to queue");
+        error.code = "PAYLOAD_TOO_LARGE";
+        throw error;
+      }
+
+      const queueTitle = `${QUEUE_TITLE_PREFIX}${command.command_id}`;
+      const stored = await github(`${baseUrl}/issues`, githubToken, {
+        method: "POST",
+        body: JSON.stringify({
+          title: queueTitle,
+          body: issueBody,
+        }),
+      });
+
+      if (!stored.ok) {
+        const error = new Error("Pilot command could not be queued");
+        error.code = "STORAGE_UNAVAILABLE";
+        error.timedOut = stored.timedOut;
+        throw error;
+      }
+
+      return {
+        record: stored.data.number,
+        metadata: { queue_title: queueTitle },
+      };
+    },
+  };
+}
+
 module.exports = async function handler(request, response) {
   const requestId = crypto.randomUUID();
   setSecurityHeaders(response, requestId);
@@ -241,33 +296,22 @@ module.exports = async function handler(request, response) {
   }
 
   const baseUrl = `${GITHUB_API}/repos/${owner}/${repository}`;
-  const queueTitle = `${QUEUE_TITLE_PREFIX}${command.command_id}`;
-  const existing = await github(`${baseUrl}/issues?state=all&per_page=100`, githubToken);
-  if (!existing.ok) {
-    return send(response, existing.timedOut ? 504 : 502, requestId, {
-      error: "Pilot queue storage is unavailable",
-    });
-  }
-  if ((existing.data || []).some((issue) => !issue.pull_request && issue.title === queueTitle)) {
-    return send(response, 409, requestId, { error: "command_id is already queued" });
-  }
-
   const envelope = encryptCommand(command, queueSecret);
-  const issueBody = JSON.stringify(envelope);
-  if (issueBody.length > MAX_ISSUE_BODY_CHARS) {
-    return send(response, 413, requestId, { error: "Encrypted command is too large to queue" });
-  }
-  const stored = await github(`${baseUrl}/issues`, githubToken, {
-    method: "POST",
-    body: JSON.stringify({
-      title: queueTitle,
-      body: issueBody,
-    }),
-  });
-  if (!stored.ok) {
-    console.error("Pilot command storage failed", { requestId, status: stored.status });
-    return send(response, stored.timedOut ? 504 : 502, requestId, {
-      error: "Pilot command could not be queued",
+  const store = createCommandStoreAdapter(githubIssueStore({ baseUrl, githubToken }));
+
+  let commandRecord;
+  try {
+    commandRecord = await store.enqueue(command, envelope);
+  } catch (error) {
+    if (error.code === "DUPLICATE_COMMAND") {
+      return send(response, 409, requestId, { error: error.message });
+    }
+    if (error.code === "PAYLOAD_TOO_LARGE") {
+      return send(response, 413, requestId, { error: error.message });
+    }
+    console.error("Pilot command storage failed", { requestId, code: error.code });
+    return send(response, error.timedOut ? 504 : 502, requestId, {
+      error: error.message || "Pilot command could not be queued",
     });
   }
 
@@ -283,7 +327,13 @@ module.exports = async function handler(request, response) {
     },
   );
 
-  if (!dispatched.ok) {
+  if (dispatched.ok) {
+    commandRecord = transitionCommandRecord(
+      commandRecord,
+      COMMAND_STATES.DISPATCHING,
+      { metadata: { dispatch_started: true } },
+    );
+  } else {
     console.warn("Pilot command queued; immediate dispatch failed", {
       requestId,
       status: dispatched.status,
@@ -293,8 +343,9 @@ module.exports = async function handler(request, response) {
   return send(response, 202, requestId, {
     accepted: true,
     command_id: command.command_id,
-    queue_record: stored.data.number,
-    state: "QUEUED",
+    queue_record: commandRecord.storage_record,
+    state: commandRecord.state,
+    command_record: commandRecord,
     dispatch_started: dispatched.ok,
     recovery: dispatched.ok ? undefined : "The scheduled recovery cycle will process this command",
   });
@@ -302,6 +353,7 @@ module.exports = async function handler(request, response) {
 
 module.exports._test = {
   encryptCommand,
+  githubIssueStore,
   normalizeCommand,
   validBranch,
   validCommandId,
