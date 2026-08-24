@@ -3,6 +3,8 @@ const crypto = require("node:crypto");
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10_000;
 const MAX_BODY_BYTES = 4_096;
+const MERGEABILITY_RETRIES = 4;
+const MERGEABILITY_RETRY_MS = 750;
 
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(left || "");
@@ -82,10 +84,34 @@ function upstreamFailure(response, requestId, operation, result) {
     timed_out: Boolean(result.timedOut),
   });
   return send(response, result.timedOut ? 504 : 502, requestId, {
-    error: result.timedOut
-      ? "GitHub request timed out"
-      : "GitHub request failed",
+    error: result.timedOut ? "GitHub request timed out" : "GitHub request failed",
   });
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function refreshUntilMergeabilityKnown(baseUrl, prNumber, githubToken) {
+  let latest = null;
+
+  for (let attempt = 0; attempt < MERGEABILITY_RETRIES; attempt += 1) {
+    latest = await github(`${baseUrl}/pulls/${prNumber}`, githubToken);
+    if (!latest.ok) return latest;
+
+    const mergeableKnown =
+      latest.data.mergeable === true ||
+      latest.data.mergeable === false ||
+      latest.data.mergeable_state === "dirty";
+
+    if (mergeableKnown) return latest;
+
+    if (attempt < MERGEABILITY_RETRIES - 1) {
+      await wait(MERGEABILITY_RETRY_MS);
+    }
+  }
+
+  return latest;
 }
 
 module.exports = async function handler(request, response) {
@@ -118,9 +144,7 @@ module.exports = async function handler(request, response) {
 
   const prNumber = Number(readBody(request).pr_number);
   if (!Number.isSafeInteger(prNumber) || prNumber < 1) {
-    return send(response, 400, requestId, {
-      error: "Invalid pull request number",
-    });
+    return send(response, 400, requestId, { error: "Invalid pull request number" });
   }
 
   const owner = process.env.PILOT_GITHUB_OWNER || "pjmcveyroutalk";
@@ -133,7 +157,8 @@ module.exports = async function handler(request, response) {
 
   const fullName = `${owner}/${repository}`;
   const baseUrl = `${GITHUB_API}/repos/${fullName}`;
-  let pull = await github(`${baseUrl}/pulls/${prNumber}`, githubToken);
+  let pull = await refreshUntilMergeabilityKnown(baseUrl, prNumber, githubToken);
+
   if (!pull.ok) {
     if (pull.status === 404) {
       return send(response, 404, requestId, { error: "Pull request not found" });
@@ -166,7 +191,7 @@ module.exports = async function handler(request, response) {
     if (!ready.ok || ready.data.errors) {
       return upstreamFailure(response, requestId, "mark_ready", ready);
     }
-    pull = await github(`${baseUrl}/pulls/${prNumber}`, githubToken);
+    pull = await refreshUntilMergeabilityKnown(baseUrl, prNumber, githubToken);
     if (!pull.ok) {
       return upstreamFailure(response, requestId, "ready_pull_refresh", pull);
     }
@@ -186,19 +211,24 @@ module.exports = async function handler(request, response) {
     });
   }
 
-  if (current.mergeable !== true || current.mergeable_state !== "clean") {
+  if (current.mergeable === false || current.mergeable_state === "dirty") {
     return send(response, 409, requestId, {
-      error: "Pull request is not currently mergeable",
+      error: "Pull request has a merge conflict",
+    });
+  }
+
+  if (current.mergeable !== true) {
+    return send(response, 409, requestId, {
+      error: "GitHub is still calculating mergeability. Retry in a moment.",
+      retryable: true,
     });
   }
 
   const [checkRuns, statuses] = await Promise.all([
-    github(
-      `${baseUrl}/commits/${expectedHeadSha}/check-runs?per_page=100`,
-      githubToken,
-    ),
+    github(`${baseUrl}/commits/${expectedHeadSha}/check-runs?per_page=100`, githubToken),
     github(`${baseUrl}/commits/${expectedHeadSha}/status`, githubToken),
   ]);
+
   if (!checkRuns.ok) {
     return upstreamFailure(response, requestId, "check_runs", checkRuns);
   }
@@ -211,13 +241,16 @@ module.exports = async function handler(request, response) {
     (check) =>
       check.status !== "completed" || !allowedConclusions.has(check.conclusion),
   );
+
   const statusesBlocked = !["success", "pending"].includes(statuses.data.state)
     ? true
     : statuses.data.state === "pending" &&
       (statuses.data.statuses || []).length > 0;
+
   if (checksBlocked || statusesBlocked) {
     return send(response, 409, requestId, {
       error: "Pull request checks are pending or unsuccessful",
+      retryable: statuses.data.state === "pending",
     });
   }
 
@@ -225,6 +258,7 @@ module.exports = async function handler(request, response) {
     method: "PUT",
     body: JSON.stringify({ merge_method: "squash", sha: expectedHeadSha }),
   });
+
   if (!merge.ok || !merge.data.merged) {
     console.warn("Pilot merge declined", {
       request_id: requestId,
@@ -232,6 +266,7 @@ module.exports = async function handler(request, response) {
     });
     return send(response, 409, requestId, {
       error: "GitHub did not merge the pull request",
+      retryable: true,
     });
   }
 
@@ -241,6 +276,7 @@ module.exports = async function handler(request, response) {
     githubToken,
     { method: "DELETE" },
   );
+
   const branchDeleted = deleted.ok || deleted.status === 404;
   if (!branchDeleted) {
     console.warn("Pilot merged but branch cleanup failed", {
