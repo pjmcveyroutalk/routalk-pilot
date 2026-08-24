@@ -4,6 +4,9 @@ const {
   createCommandStoreAdapter,
   transitionCommandRecord,
 } = require("../lib/command-state");
+const {
+  createGithubIssueCommandStore,
+} = require("../lib/stores/github-issue-command-store");
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10_000;
@@ -11,8 +14,6 @@ const MAX_BODY_BYTES = 100_000;
 const MAX_FILES = 20;
 const MAX_FILE_BYTES = 32_000;
 const MAX_TOTAL_FILE_BYTES = 32_000;
-const MAX_ISSUE_BODY_CHARS = 65_000;
-const QUEUE_TITLE_PREFIX = "Pilot queue command ";
 
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(left || "");
@@ -59,7 +60,6 @@ function validTarget(value) {
   if (typeof value !== "string" || value.length < 1 || value.length > 240) {
     return false;
   }
-
   const normalized = value.replaceAll("\\", "/");
   const parts = normalized.split("/");
   const lowered = normalized.toLowerCase();
@@ -125,7 +125,9 @@ function normalizeCommand(body) {
     if (!file || typeof file !== "object") {
       throw new Error(`files[${index}] is invalid`);
     }
-    const path = validateText(file.path, `files[${index}].path`, 240, true).replaceAll("\\", "/");
+
+    const path = validateText(file.path, `files[${index}].path`, 240, true)
+      .replaceAll("\\", "/");
     if (!validTarget(path)) throw new Error(`files[${index}].path is unsafe`);
     if (seenTargets.has(path)) throw new Error(`duplicate target path: ${path}`);
     seenTargets.add(path);
@@ -203,56 +205,6 @@ async function github(url, token, options = {}) {
   }
 }
 
-function githubIssueStore({ baseUrl, githubToken }) {
-  return {
-    name: "github_issues",
-
-    async findByCommandId(commandId) {
-      const queueTitle = `${QUEUE_TITLE_PREFIX}${commandId}`;
-      const existing = await github(`${baseUrl}/issues?state=all&per_page=100`, githubToken);
-      if (!existing.ok) {
-        const error = new Error("Pilot queue storage is unavailable");
-        error.code = "STORAGE_UNAVAILABLE";
-        error.timedOut = existing.timedOut;
-        throw error;
-      }
-      return (existing.data || []).find(
-        (issue) => !issue.pull_request && issue.title === queueTitle,
-      ) || null;
-    },
-
-    async persist(command, encryptedEnvelope) {
-      const issueBody = JSON.stringify(encryptedEnvelope);
-      if (issueBody.length > MAX_ISSUE_BODY_CHARS) {
-        const error = new Error("Encrypted command is too large to queue");
-        error.code = "PAYLOAD_TOO_LARGE";
-        throw error;
-      }
-
-      const queueTitle = `${QUEUE_TITLE_PREFIX}${command.command_id}`;
-      const stored = await github(`${baseUrl}/issues`, githubToken, {
-        method: "POST",
-        body: JSON.stringify({
-          title: queueTitle,
-          body: issueBody,
-        }),
-      });
-
-      if (!stored.ok) {
-        const error = new Error("Pilot command could not be queued");
-        error.code = "STORAGE_UNAVAILABLE";
-        error.timedOut = stored.timedOut;
-        throw error;
-      }
-
-      return {
-        record: stored.data.number,
-        metadata: { queue_title: queueTitle },
-      };
-    },
-  };
-}
-
 module.exports = async function handler(request, response) {
   const requestId = crypto.randomUUID();
   setSecurityHeaders(response, requestId);
@@ -275,7 +227,9 @@ module.exports = async function handler(request, response) {
   }
 
   const authorization = request.headers.authorization || "";
-  const suppliedSecret = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+  const suppliedSecret = authorization.startsWith("Bearer ")
+    ? authorization.slice(7)
+    : "";
   if (!safeEqual(suppliedSecret, triggerSecret)) {
     return send(response, 401, requestId, { error: "Unauthorized" });
   }
@@ -284,20 +238,34 @@ module.exports = async function handler(request, response) {
   try {
     command = normalizeCommand(readBody(request));
   } catch (error) {
-    return send(response, 400, requestId, { error: error.message || "Invalid command" });
+    return send(response, 400, requestId, {
+      error: error.message || "Invalid command",
+    });
   }
 
   const owner = process.env.PILOT_GITHUB_OWNER || "pjmcveyroutalk";
   const repository = process.env.PILOT_GITHUB_REPO || "routalk-pilot";
-  const workflow = process.env.PILOT_GITHUB_WORKFLOW || "routalk-pilot-bridge.yml";
+  const workflow =
+    process.env.PILOT_GITHUB_WORKFLOW || "routalk-pilot-bridge.yml";
   const mainRef = process.env.PILOT_GITHUB_REF || "main";
-  if (!validRepositoryPart(owner) || !validRepositoryPart(repository) || !validWorkflow(workflow)) {
-    return send(response, 503, requestId, { error: "Pilot queue configuration is invalid" });
+  if (
+    !validRepositoryPart(owner) ||
+    !validRepositoryPart(repository) ||
+    !validWorkflow(workflow)
+  ) {
+    return send(response, 503, requestId, {
+      error: "Pilot queue configuration is invalid",
+    });
   }
 
   const baseUrl = `${GITHUB_API}/repos/${owner}/${repository}`;
   const envelope = encryptCommand(command, queueSecret);
-  const store = createCommandStoreAdapter(githubIssueStore({ baseUrl, githubToken }));
+  const githubStore = createGithubIssueCommandStore({
+    baseUrl,
+    githubToken,
+    githubRequest: github,
+  });
+  const store = createCommandStoreAdapter(githubStore);
 
   let commandRecord;
   try {
@@ -309,7 +277,10 @@ module.exports = async function handler(request, response) {
     if (error.code === "PAYLOAD_TOO_LARGE") {
       return send(response, 413, requestId, { error: error.message });
     }
-    console.error("Pilot command storage failed", { requestId, code: error.code });
+    console.error("Pilot command storage failed", {
+      requestId,
+      code: error.code,
+    });
     return send(response, error.timedOut ? 504 : 502, requestId, {
       error: error.message || "Pilot command could not be queued",
     });
@@ -322,7 +293,10 @@ module.exports = async function handler(request, response) {
       method: "POST",
       body: JSON.stringify({
         ref: mainRef,
-        inputs: { source: "pilot_queue", command_id: command.command_id },
+        inputs: {
+          source: "pilot_queue",
+          command_id: command.command_id,
+        },
       }),
     },
   );
@@ -347,13 +321,14 @@ module.exports = async function handler(request, response) {
     state: commandRecord.state,
     command_record: commandRecord,
     dispatch_started: dispatched.ok,
-    recovery: dispatched.ok ? undefined : "The scheduled recovery cycle will process this command",
+    recovery: dispatched.ok
+      ? undefined
+      : "The scheduled recovery cycle will process this command",
   });
 };
 
 module.exports._test = {
   encryptCommand,
-  githubIssueStore,
   normalizeCommand,
   validBranch,
   validCommandId,
