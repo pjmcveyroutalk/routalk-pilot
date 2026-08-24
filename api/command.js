@@ -65,8 +65,20 @@ async function verifyProduction(request, triggerSecret) {
   const timeout = setTimeout(() => controller.abort(), PRODUCTION_VERIFY_TIMEOUT_MS);
 
   try {
-    const protocol = request.headers["x-forwarded-proto"] || "https";
-    const host = request.headers["x-forwarded-host"] || request.headers.host;
+    const forwardedHost = String(request.headers["x-forwarded-host"] || "").split(",")[0].trim();
+    const host = forwardedHost || String(request.headers.host || "").split(",")[0].trim();
+    const forwardedProto = String(request.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+    const protocol = forwardedProto === "http" ? "http" : "https";
+
+    if (!host || !/^[A-Za-z0-9.-]+(?::\d{1,5})?$/.test(host)) {
+      return {
+        checked: true,
+        ready: false,
+        state: "INVALID_ORIGIN",
+        verified_at: new Date().toISOString(),
+      };
+    }
+
     const target = `${protocol}://${host}/api/verify-production`;
 
     const result = await fetch(target, {

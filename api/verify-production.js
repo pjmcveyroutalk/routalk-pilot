@@ -6,6 +6,24 @@ function safeEqual(left, right) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+function forwardedValue(value) {
+  if (typeof value !== "string") return "";
+  return value.split(",")[0].trim();
+}
+
+function resolveOrigin(request) {
+  const forwardedHost = forwardedValue(request.headers["x-forwarded-host"]);
+  const host = forwardedHost || forwardedValue(request.headers.host);
+  const forwardedProto = forwardedValue(request.headers["x-forwarded-proto"]);
+  const protocol = forwardedProto === "http" ? "http" : "https";
+
+  if (!host || !/^[A-Za-z0-9.-]+(?::\d{1,5})?$/.test(host)) {
+    return null;
+  }
+
+  return `${protocol}://${host}`;
+}
+
 module.exports = async function handler(request, response) {
   const requestId = crypto.randomUUID();
   response.setHeader("Cache-Control", "no-store, max-age=0");
@@ -31,7 +49,12 @@ module.exports = async function handler(request, response) {
     return response.status(401).json({ error: "Unauthorized", request_id: requestId });
   }
 
-  const target = new URL("/", `https://${request.headers.host}`);
+  const origin = resolveOrigin(request);
+  if (!origin) {
+    return response.status(400).json({ error: "Verification origin is invalid", request_id: requestId });
+  }
+
+  const target = new URL("/", origin);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
 
@@ -66,3 +89,5 @@ module.exports = async function handler(request, response) {
     clearTimeout(timeout);
   }
 };
+
+module.exports._test = { forwardedValue, resolveOrigin };
