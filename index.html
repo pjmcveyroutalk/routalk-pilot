@@ -271,6 +271,9 @@
         <p class="helper">
           Select a complete .json or .pilot package, review its scope, then submit it securely.
         </p>
+        <button id="resume-last-button" class="secondary-button" type="button" hidden>
+          Resume last command
+        </button>
         <section id="package-review" class="package-review" aria-live="polite" hidden>
           <h2>Package review</h2>
           <dl id="package-summary"></dl>
@@ -285,6 +288,7 @@
       </p>
     </main>
 
+    <script src="/pilot-recovery.js"></script>
     <script>
       const form = document.querySelector("#dispatch-form");
       const secretInput = document.querySelector("#secret");
@@ -295,9 +299,20 @@
       const packageReview = document.querySelector("#package-review");
       const packageSummary = document.querySelector("#package-summary");
       const packageSubmitButton = document.querySelector("#package-submit-button");
+      const resumeLastButton = document.querySelector("#resume-last-button");
       const status = document.querySelector("#status");
       const results = document.querySelector("#results");
       let approvedPackage = null;
+
+      const lastCommandId = window.PilotRecovery?.readLastCommandId?.();
+      if (lastCommandId) {
+        resumeLastButton.hidden = false;
+        resumeLastButton.textContent = `Resume last command: ${lastCommandId}`;
+      }
+
+      resumeLastButton.addEventListener("click", () => {
+        location.href = window.PilotRecovery?.resumeUrl?.() || "/resume.html";
+      });
 
       const wait = (milliseconds) =>
         new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -671,6 +686,10 @@
             throw new Error(result.error || `Package submission failed (${response.status})`);
           }
 
+          window.PilotRecovery?.rememberCommandId?.(result.command_id);
+          resumeLastButton.hidden = false;
+          resumeLastButton.textContent = `Resume last command: ${result.command_id}`;
+
           secretInput.value = "";
           approvedPackage = null;
           packageFile.value = "";
@@ -745,6 +764,10 @@
           if (!response.ok) {
             throw new Error(result.error || `Queue request failed (${response.status})`);
           }
+
+          window.PilotRecovery?.rememberCommandId?.(result.command_id);
+          resumeLastButton.hidden = false;
+          resumeLastButton.textContent = `Resume last command: ${result.command_id}`;
 
           secretInput.value = "";
           showStatus("Verification queued. Monitoring GitHub now…", "success");
