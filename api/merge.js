@@ -237,9 +237,14 @@ module.exports = async function handler(request, response) {
   }
 
   const allowedConclusions = new Set(["success", "neutral", "skipped"]);
-  const checksBlocked = (checkRuns.data.check_runs || []).some(
+  const checkRunList = checkRuns.data.check_runs || [];
+  const failingCheckRuns = checkRunList.filter(
     (check) =>
-      check.status !== "completed" || !allowedConclusions.has(check.conclusion),
+      check.status === "completed" &&
+      !allowedConclusions.has(check.conclusion),
+  );
+  const pendingCheckRuns = checkRunList.filter(
+    (check) => check.status !== "completed",
   );
 
   const commitStatuses = statuses.data.statuses || [];
@@ -250,19 +255,38 @@ module.exports = async function handler(request, response) {
     (status) => status.state === "pending",
   );
 
-  // GitHub's combined status can temporarily remain "pending" even after all
-  // reported provider contexts have succeeded. Gate on the individual contexts
-  // we actually received instead of treating the aggregate cache as authoritative.
+  const successfulStatusContexts = new Set(
+    commitStatuses
+      .filter((status) => status.state === "success")
+      .map((status) => String(status.context || "").toLowerCase()),
+  );
+
+  // Vercel publishes both commit statuses and check-runs. GitHub can leave the
+  // check-run copy pending briefly after the concrete Vercel status context has
+  // already succeeded. Do not let that duplicate representation create a false
+  // negative. Pending non-Vercel checks still block the merge.
+  const meaningfulPendingCheckRuns = pendingCheckRuns.filter((check) => {
+    const appSlug = String(check.app?.slug || "").toLowerCase();
+    if (appSlug !== "vercel") return true;
+
+    const hasSuccessfulVercelStatus = [...successfulStatusContexts].some(
+      (context) => context.startsWith("vercel"),
+    );
+    return !hasSuccessfulVercelStatus;
+  });
+
+  const checksBlocked = failingCheckRuns.length > 0;
+  const checksPending = meaningfulPendingCheckRuns.length > 0;
   const statusesBlocked = failingCommitStatuses.length > 0;
   const statusesPending = pendingCommitStatuses.length > 0;
 
-  if (checksBlocked || statusesBlocked || statusesPending) {
+  if (checksBlocked || checksPending || statusesBlocked || statusesPending) {
     return send(response, 409, requestId, {
       error:
-        statusesBlocked || checksBlocked
+        checksBlocked || statusesBlocked
           ? "Pull request checks are unsuccessful"
           : "Pull request checks are still pending",
-      retryable: !statusesBlocked,
+      retryable: !checksBlocked && !statusesBlocked,
     });
   }
 
