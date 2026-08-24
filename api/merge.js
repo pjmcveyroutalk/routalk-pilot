@@ -7,6 +7,8 @@ const MERGEABILITY_RETRIES = 4;
 const MERGEABILITY_RETRY_MS = 750;
 const MERGE_ATTEMPTS = 4;
 const MERGE_RETRY_MS = 1000;
+const CHECK_SETTLE_ATTEMPTS = 7;
+const CHECK_SETTLE_RETRY_MS = 1000;
 
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(left || "");
@@ -226,69 +228,87 @@ module.exports = async function handler(request, response) {
     });
   }
 
-  const [checkRuns, statuses] = await Promise.all([
-    github(`${baseUrl}/commits/${expectedHeadSha}/check-runs?per_page=100`, githubToken),
-    github(`${baseUrl}/commits/${expectedHeadSha}/status`, githubToken),
-  ]);
-
-  if (!checkRuns.ok) {
-    return upstreamFailure(response, requestId, "check_runs", checkRuns);
-  }
-  if (!statuses.ok) {
-    return upstreamFailure(response, requestId, "commit_status", statuses);
-  }
-
   const allowedConclusions = new Set(["success", "neutral", "skipped"]);
-  const checkRunList = checkRuns.data.check_runs || [];
-  const failingCheckRuns = checkRunList.filter(
-    (check) =>
-      check.status === "completed" &&
-      !allowedConclusions.has(check.conclusion),
-  );
-  const pendingCheckRuns = checkRunList.filter(
-    (check) => check.status !== "completed",
-  );
 
-  const commitStatuses = statuses.data.statuses || [];
-  const failingCommitStatuses = commitStatuses.filter((status) =>
-    ["error", "failure"].includes(status.state),
-  );
-  const pendingCommitStatuses = commitStatuses.filter(
-    (status) => status.state === "pending",
-  );
+  async function readCheckGate() {
+    const [checkRuns, statuses] = await Promise.all([
+      github(`${baseUrl}/commits/${expectedHeadSha}/check-runs?per_page=100`, githubToken),
+      github(`${baseUrl}/commits/${expectedHeadSha}/status`, githubToken),
+    ]);
 
-  const successfulStatusContexts = new Set(
-    commitStatuses
-      .filter((status) => status.state === "success")
-      .map((status) => String(status.context || "").toLowerCase()),
-  );
+    if (!checkRuns.ok) return { upstream: ["check_runs", checkRuns] };
+    if (!statuses.ok) return { upstream: ["commit_status", statuses] };
 
-  // Vercel publishes both commit statuses and check-runs. GitHub can leave the
-  // check-run copy pending briefly after the concrete Vercel status context has
-  // already succeeded. Do not let that duplicate representation create a false
-  // negative. Pending non-Vercel checks still block the merge.
-  const meaningfulPendingCheckRuns = pendingCheckRuns.filter((check) => {
-    const appSlug = String(check.app?.slug || "").toLowerCase();
-    if (appSlug !== "vercel") return true;
-
-    const hasSuccessfulVercelStatus = [...successfulStatusContexts].some(
-      (context) => context.startsWith("vercel"),
+    const checkRunList = checkRuns.data.check_runs || [];
+    const failingCheckRuns = checkRunList.filter(
+      (check) =>
+        check.status === "completed" &&
+        !allowedConclusions.has(check.conclusion),
     );
-    return !hasSuccessfulVercelStatus;
-  });
+    const pendingCheckRuns = checkRunList.filter(
+      (check) => check.status !== "completed",
+    );
 
-  const checksBlocked = failingCheckRuns.length > 0;
-  const checksPending = meaningfulPendingCheckRuns.length > 0;
-  const statusesBlocked = failingCommitStatuses.length > 0;
-  const statusesPending = pendingCommitStatuses.length > 0;
+    const commitStatuses = statuses.data.statuses || [];
+    const failingCommitStatuses = commitStatuses.filter((status) =>
+      ["error", "failure"].includes(status.state),
+    );
+    const pendingCommitStatuses = commitStatuses.filter(
+      (status) => status.state === "pending",
+    );
 
-  if (checksBlocked || checksPending || statusesBlocked || statusesPending) {
+    const successfulStatusContexts = new Set(
+      commitStatuses
+        .filter((status) => status.state === "success")
+        .map((status) => String(status.context || "").toLowerCase()),
+    );
+
+    const meaningfulPendingCheckRuns = pendingCheckRuns.filter((check) => {
+      const appSlug = String(check.app?.slug || "").toLowerCase();
+      if (appSlug !== "vercel") return true;
+
+      const hasSuccessfulVercelStatus = [...successfulStatusContexts].some(
+        (context) => context.startsWith("vercel"),
+      );
+      return !hasSuccessfulVercelStatus;
+    });
+
+    return {
+      blocked:
+        failingCheckRuns.length > 0 ||
+        failingCommitStatuses.length > 0,
+      pending:
+        meaningfulPendingCheckRuns.length > 0 ||
+        pendingCommitStatuses.length > 0,
+    };
+  }
+
+  let checkGate = null;
+  for (let attempt = 0; attempt < CHECK_SETTLE_ATTEMPTS; attempt += 1) {
+    checkGate = await readCheckGate();
+
+    if (checkGate.upstream) {
+      return upstreamFailure(
+        response,
+        requestId,
+        checkGate.upstream[0],
+        checkGate.upstream[1],
+      );
+    }
+
+    if (checkGate.blocked || !checkGate.pending) break;
+
+    if (attempt < CHECK_SETTLE_ATTEMPTS - 1) {
+      await wait(CHECK_SETTLE_RETRY_MS);
+    }
+  }
+
+  if (checkGate.blocked || checkGate.pending) {
     return send(response, 409, requestId, {
-      error:
-        checksBlocked || statusesBlocked
-          ? "Pull request checks are unsuccessful"
-          : "Pull request checks are still pending",
-      retryable: !checksBlocked && !statusesBlocked,
+      error: checkGate.blocked
+        ? "Pull request checks are unsuccessful"
+        : "Pull request checks are still pending after verification wait",
+      retryable: !checkGate.blocked,
     });
   }
 
