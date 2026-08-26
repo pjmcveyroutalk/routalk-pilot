@@ -1,0 +1,16 @@
+{
+  "policy_version": 1,
+  "name": "vercel-preview-suppression-boundary",
+  "default_for_pilot_development": "SKIP_PREVIEW",
+  "preserve": [
+    "required repository-native CI",
+    "explicit production release deployment",
+    "independent production verification"
+  ],
+  "rules": {
+    "routine_development": "Pilot development-only changes should not consume Vercel preview builds.",
+    "release": "Explicit APPROVED_FOR_RELEASE work remains eligible for the configured production deployment path.",
+    "safety": "A skipped preview is neither deployed nor production verified.",
+    "reversible": "Provider-specific suppression must be isolated and removable without changing core release policy."
+  }
+}
