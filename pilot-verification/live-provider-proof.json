@@ -1,0 +1,33 @@
+{
+  "proof_version": 1,
+  "name": "pilot-live-provider-proof",
+  "purpose": "Define the single intentional live-provider proof for the package-first release flow.",
+  "preconditions": [
+    "release bundle readiness == READY",
+    "explicit approval == APPROVED_FOR_RELEASE",
+    "deployment preflight == READY",
+    "deployment gate == ALLOW",
+    "deployment request is complete",
+    "Vercel adapter is configured"
+  ],
+  "proof_sequence": [
+    "record pre-deployment evidence",
+    "invoke configured Vercel adapter exactly once",
+    "record deployment result and deployment id",
+    "run independent production verification",
+    "require expected revision == observed revision",
+    "require all required production health checks == PASSED",
+    "record PRODUCTION_VERIFIED only after evidence passes"
+  ],
+  "success_criteria": {
+    "development_provider_invocations_before_approval": 0,
+    "intentional_provider_invocations_after_approval": 1,
+    "final_state": "PRODUCTION_VERIFIED"
+  },
+  "safety": {
+    "no_credentials_in_package": true,
+    "no_implicit_retry_deployments": true,
+    "failed_verification_does_not_redeploy": true,
+    "pr_80_untouched": true
+  }
+}
