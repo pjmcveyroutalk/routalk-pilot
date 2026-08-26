@@ -1,0 +1,25 @@
+{
+  "manifest_version": 1,
+  "name": "provider-independent-development-verification",
+  "purpose": "Verify routine Pilot development work without invoking a deployment provider.",
+  "required_checks": [
+    {
+      "id": "package-structure",
+      "type": "repository-native",
+      "required": true
+    },
+    {
+      "id": "available-tests",
+      "type": "repository-native",
+      "required": true
+    },
+    {
+      "id": "deployment-not-required",
+      "type": "policy",
+      "required": true
+    }
+  ],
+  "overall_rule": "pass only when every required check passes",
+  "promotion_target": "RELEASE_CANDIDATE",
+  "deployment_boundary": "APPROVED_FOR_RELEASE"
+}
