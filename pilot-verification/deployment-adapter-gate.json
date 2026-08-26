@@ -1,0 +1,35 @@
+{
+  "contract_version": 1,
+  "name": "pilot-deployment-adapter-gate",
+  "purpose": "Make the deployment adapter reject invocation unless the release has crossed the explicit approval boundary.",
+  "decision_inputs": [
+    "release_state",
+    "release_candidate_id",
+    "deployment_policy",
+    "explicit_deployment_required"
+  ],
+  "decisions": ["ALLOW", "SKIP", "BLOCK"],
+  "rules": [
+    {
+      "when": "release_state in [BUILDING, VERIFIED, RELEASE_CANDIDATE]",
+      "decision": "SKIP",
+      "reason": "development_or_pre_promotion"
+    },
+    {
+      "when": "release_state == APPROVED_FOR_RELEASE and explicit_deployment_required == true",
+      "decision": "ALLOW",
+      "reason": "approved_release"
+    },
+    {
+      "when": "release_state == APPROVED_FOR_RELEASE and explicit_deployment_required != true",
+      "decision": "BLOCK",
+      "reason": "missing_explicit_deployment_intent"
+    }
+  ],
+  "safety": {
+    "required_ci_unchanged": true,
+    "skip_is_not_success": true,
+    "skip_is_not_production_verified": true,
+    "decision_must_be_auditable": true
+  }
+}
