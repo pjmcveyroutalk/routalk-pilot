@@ -3,7 +3,7 @@ const crypto = require("node:crypto");
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10_000;
 const MAX_BODY_BYTES = 4_096;
-const MERGEABILITY_RETRIES = 4;
+const MERGEABILITY_RETRIES = 6;
 const MERGEABILITY_RETRY_MS = 750;
 const MERGE_ATTEMPTS = 4;
 const MERGE_RETRY_MS = 1000;
@@ -60,11 +60,7 @@ async function github(url, token, options = {}) {
     const data = await result.json().catch(() => ({}));
     return { ok: result.ok, status: result.status, data };
   } catch (error) {
-    return {
-      ok: false,
-      status: 0,
-      timedOut: error?.name === "AbortError",
-    };
+    return { ok: false, status: 0, timedOut: error?.name === "AbortError" };
   } finally {
     clearTimeout(timeout);
   }
@@ -201,7 +197,7 @@ module.exports = async function handler(request, response) {
     }
   }
 
-  const current = pull.data;
+  let current = pull.data;
   const expectedHeadSha = String(current.head?.sha || "");
   if (
     current.state !== "open" ||
@@ -218,13 +214,6 @@ module.exports = async function handler(request, response) {
   if (current.mergeable === false || current.mergeable_state === "dirty") {
     return send(response, 409, requestId, {
       error: "Pull request has a merge conflict",
-    });
-  }
-
-  if (current.mergeable !== true) {
-    return send(response, 409, requestId, {
-      error: "GitHub is still calculating mergeability. Retry in a moment.",
-      retryable: true,
     });
   }
 
@@ -334,6 +323,39 @@ module.exports = async function handler(request, response) {
         : "Pull request checks are still pending after verification wait",
       retryable: !checkGate.blocked,
       check_diagnostics: checkGate.diagnostics,
+    });
+  }
+
+  pull = await refreshUntilMergeabilityKnown(baseUrl, prNumber, githubToken);
+  if (!pull.ok) {
+    return upstreamFailure(response, requestId, "mergeability_final_refresh", pull);
+  }
+
+  current = pull.data;
+  if (
+    current.state !== "open" ||
+    current.base?.ref !== "main" ||
+    current.head?.ref !== headRef ||
+    current.head?.repo?.full_name !== fullName ||
+    String(current.head?.sha || "") !== expectedHeadSha
+  ) {
+    return send(response, 409, requestId, {
+      error: "Pull request changed while Pilot was settling mergeability",
+      retryable: false,
+    });
+  }
+
+  if (current.mergeable === false || current.mergeable_state === "dirty") {
+    return send(response, 409, requestId, {
+      error: "Pull request has a merge conflict",
+      retryable: false,
+    });
+  }
+
+  if (current.mergeable !== true) {
+    return send(response, 409, requestId, {
+      error: "GitHub mergeability did not settle within Pilot's bounded wait",
+      retryable: true,
     });
   }
 
