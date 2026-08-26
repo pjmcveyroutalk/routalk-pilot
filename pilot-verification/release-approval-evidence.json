@@ -1,0 +1,22 @@
+{
+  "contract_version": 1,
+  "name": "pilot-release-approval-evidence",
+  "purpose": "Record explicit, auditable approval that promotes a READY release candidate to APPROVED_FOR_RELEASE without conflating approval with deployment.",
+  "required_inputs": [
+    "release_candidate_id",
+    "bundle_readiness_status",
+    "approver",
+    "approval_intent"
+  ],
+  "rules": {
+    "ready_required": "Approval is valid only when bundle readiness is READY.",
+    "explicit_intent": "Approval must be an explicit release action, not inferred from merge, verification, or bundle creation.",
+    "audit": "Approval evidence records approver, release candidate, timestamp, and intent.",
+    "no_deployment": "Recording approval changes release state to APPROVED_FOR_RELEASE but does not itself prove deployment occurred.",
+    "provider_neutral": "Approval evidence contains no deployment-provider-specific requirement."
+  },
+  "output": {
+    "release_state": "APPROVED_FOR_RELEASE",
+    "next_allowed_operation": "deployment_adapter_preflight"
+  }
+}
