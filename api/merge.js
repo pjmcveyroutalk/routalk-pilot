@@ -352,10 +352,18 @@ module.exports = async function handler(request, response) {
     });
   }
 
-  if (current.mergeable !== true) {
+  // GitHub may leave mergeable=null / mergeable_state="unknown" even for
+  // otherwise clean PRs. After identity, SHA, branch, conflict and CI gates
+  // have all passed, the merge API itself is the authoritative decision.
+  // Known conflicts still stop above; unknown metadata no longer blocks.
+  const mergeabilityHintUnknown =
+    current.mergeable == null &&
+    String(current.mergeable_state || "").toLowerCase() === "unknown";
+
+  if (current.mergeable !== true && !mergeabilityHintUnknown) {
     return send(response, 409, requestId, {
-      error: "GitHub mergeability did not settle within Pilot's bounded wait",
-      retryable: true,
+      error: "Pull request mergeability state is not eligible for merge",
+      retryable: false,
     });
   }
 
