@@ -1,0 +1,21 @@
+{
+  "contract_version": 1,
+  "name": "pilot-deployment-gate-decision-evidence",
+  "purpose": "Record deterministic evidence for every deployment-adapter gate decision so Pilot can prove when provider invocation was skipped, blocked, or allowed.",
+  "required_fields": [
+    "release_candidate_id",
+    "release_state",
+    "decision",
+    "reason",
+    "provider_invoked",
+    "decided_at"
+  ],
+  "decisions": ["ALLOW", "SKIP", "BLOCK"],
+  "rules": {
+    "skip": "SKIP must record provider_invoked=false and must not be represented as deployment success.",
+    "block": "BLOCK must record provider_invoked=false and preserve the reason needed for remediation.",
+    "allow": "ALLOW records authorization to invoke the configured adapter but is not itself proof of deployment.",
+    "audit": "Every decision is machine-readable and attributable to the release candidate.",
+    "production": "No gate decision alone may produce PRODUCTION_VERIFIED."
+  }
+}
