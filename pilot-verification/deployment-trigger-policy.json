@@ -1,0 +1,22 @@
+{
+  "policy_version": 1,
+  "name": "pilot-deployment-trigger-policy",
+  "purpose": "Prevent routine development packages and pull requests from consuming deployment-provider capacity before release promotion.",
+  "default_behavior": "SKIP_DEPLOYMENT",
+  "deployment_allowed_when": [
+    "release_state == APPROVED_FOR_RELEASE",
+    "explicit_deployment_required == true"
+  ],
+  "deployment_skipped_when": [
+    "change_class == contract_or_metadata_only",
+    "release_state in [BUILDING, VERIFIED, RELEASE_CANDIDATE]",
+    "package_policy == development_verification_only"
+  ],
+  "rules": {
+    "pilot_controls_promotion": "Pilot release state governs whether deployment is requested.",
+    "no_implicit_preview": "Creating a routine development PR must not implicitly require a deployment-provider preview.",
+    "provider_neutral": "The core policy is provider-neutral; provider-specific skip mechanics belong in the deployment adapter.",
+    "safety": "A skipped deployment may not be represented as production verified.",
+    "override": "Any explicit deployment override must be intentional, auditable, and scoped to a release candidate."
+  }
+}
