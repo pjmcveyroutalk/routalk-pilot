@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Pilot Live Provider Readiness</title>
+  <style>
+    body{font-family:system-ui,sans-serif;background:#07111f;color:#eef8ff;margin:0;padding:24px}
+    main{max-width:640px;margin:auto}
+    input,button{width:100%;box-sizing:border-box;font:inherit;padding:14px;border-radius:12px;margin-top:12px}
+    input{background:#0b1728;color:#fff;border:1px solid #49637a}
+    button{border:0;background:#72dfd1;color:#07111f;font-weight:800}
+    pre{white-space:pre-wrap;background:#0b1728;padding:16px;border-radius:12px;margin-top:18px}
+    .muted{color:#aab9c8}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Live provider readiness</h1>
+  <p class="muted">Checks whether Pilot has the non-secret environment configuration needed for the one-shot live provider proof. No deployment is triggered.</p>
+  <input id="secret" type="password" autocomplete="current-password" placeholder="Pilot trigger secret">
+  <button id="check">Check readiness</button>
+  <pre id="out">Not checked yet.</pre>
+</main>
+<script>
+const out=document.getElementById("out");
+document.getElementById("check").addEventListener("click", async () => {
+  const secret=document.getElementById("secret").value;
+  out.textContent="Checking…";
+  try{
+    const r=await fetch("/api/live-provider-readiness",{
+      method:"POST",
+      headers:{Authorization:`Bearer ${secret}`}
+    });
+    const data=await r.json();
+    out.textContent=JSON.stringify(data,null,2);
+  }catch(e){
+    out.textContent="Readiness check failed.";
+  }
+});
+</script>
+</body>
+</html>
