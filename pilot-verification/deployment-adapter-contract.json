@@ -1,0 +1,34 @@
+{
+  "contract_version": 1,
+  "name": "pilot-deployment-adapter",
+  "purpose": "Define a replaceable provider-neutral interface invoked only after explicit release approval.",
+  "invocation_requirement": "APPROVED_FOR_RELEASE",
+  "operations": [
+    "preflight",
+    "deploy",
+    "get_status",
+    "get_evidence"
+  ],
+  "input_fields": [
+    "release_candidate_id",
+    "source_revision",
+    "target_environment",
+    "verification_evidence"
+  ],
+  "result_fields": [
+    "provider",
+    "deployment_id",
+    "status",
+    "started_at",
+    "completed_at",
+    "evidence"
+  ],
+  "statuses": ["READY", "DEPLOYING", "DEPLOYED", "BLOCKED", "FAILED", "DEGRADED"],
+  "rules": {
+    "provider_neutral_core": "Core orchestration must consume this adapter contract rather than provider-specific deployment fields.",
+    "no_development_invocation": "Routine build and development verification must not invoke this adapter.",
+    "approved_only": "Deploy may be invoked only for APPROVED_FOR_RELEASE work.",
+    "deployment_not_completion": "DEPLOYED does not imply PRODUCTION_VERIFIED.",
+    "failure_preserves_state": "Blocked, failed, or degraded provider results must preserve release state and evidence for safe retry or recovery."
+  }
+}
