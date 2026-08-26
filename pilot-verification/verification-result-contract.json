@@ -1,0 +1,28 @@
+{
+  "contract_version": 1,
+  "name": "pilot-development-verification-result",
+  "purpose": "Provide a deterministic provider-independent result for development verification and release-candidate eligibility.",
+  "statuses": ["NOT_RUN", "RUNNING", "PASSED", "BLOCKED", "FAILED"],
+  "required_result_fields": [
+    "contract_version",
+    "package_id",
+    "overall_status",
+    "checks",
+    "verified_at"
+  ],
+  "check_fields": [
+    "id",
+    "name",
+    "type",
+    "required",
+    "status",
+    "evidence"
+  ],
+  "rules": {
+    "pass": "overall_status may be PASSED only when every required check is PASSED",
+    "block": "a required BLOCKED or FAILED check prevents release-candidate eligibility",
+    "optional": "optional checks do not veto promotion unless policy marks them required",
+    "deployment": "development verification must not invoke the deployment adapter"
+  },
+  "eligible_next_state": "RELEASE_CANDIDATE"
+}
