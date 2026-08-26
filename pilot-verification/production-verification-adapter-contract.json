@@ -1,0 +1,22 @@
+{
+  "contract_version": 1,
+  "name": "pilot-production-verification-adapter",
+  "purpose": "Verify the deployed production outcome independently from deployment-provider success.",
+  "invocation_requirement": "DEPLOYED",
+  "operations": ["preflight", "verify", "get_status", "get_evidence"],
+  "input_fields": [
+    "release_candidate_id",
+    "deployment_id",
+    "target_environment",
+    "expected_revision",
+    "verification_policy"
+  ],
+  "statuses": ["READY", "VERIFYING", "PRODUCTION_VERIFIED", "BLOCKED", "FAILED", "DEGRADED"],
+  "rules": {
+    "deployment_not_verification": "A DEPLOYED result alone must never become PRODUCTION_VERIFIED.",
+    "provider_neutral": "Production verification must consume a provider-neutral contract rather than Vercel-specific success fields.",
+    "evidence_required": "PRODUCTION_VERIFIED requires recorded verification evidence.",
+    "failure_preserves_state": "Blocked, failed, or degraded verification preserves deployment/release evidence for retry or recovery.",
+    "no_extra_deploy": "Running production verification must not itself trigger another deployment."
+  }
+}
