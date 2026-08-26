@@ -1,0 +1,25 @@
+{
+  "contract_version": 1,
+  "name": "pilot-release-candidate",
+  "purpose": "Bundle provider-independently verified development work into a release candidate without invoking deployment.",
+  "entry_requirements": {
+    "verification_overall_status": "PASSED",
+    "required_checks": "all PASSED"
+  },
+  "states": ["DRAFT", "READY", "BLOCKED", "APPROVED_FOR_RELEASE"],
+  "required_fields": [
+    "contract_version",
+    "release_candidate_id",
+    "source_package_ids",
+    "verification_results",
+    "status",
+    "created_at"
+  ],
+  "rules": {
+    "ready": "READY only when every included source package has a passing provider-independent verification result",
+    "blocked": "Any required verification failure blocks the release candidate",
+    "deployment": "Creating or validating a release candidate must not invoke the deployment adapter",
+    "approval_boundary": "Deployment may begin only after explicit APPROVED_FOR_RELEASE promotion"
+  },
+  "next_state_after_approval": "DEPLOYING"
+}
