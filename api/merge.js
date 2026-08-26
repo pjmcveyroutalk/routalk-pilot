@@ -280,6 +280,30 @@ module.exports = async function handler(request, response) {
       pending:
         meaningfulPendingCheckRuns.length > 0 ||
         pendingCommitStatuses.length > 0,
+      diagnostics: {
+        failing_check_runs: failingCheckRuns.map((check) => ({
+          name: String(check.name || ""),
+          app: String(check.app?.slug || check.app?.name || ""),
+          status: String(check.status || ""),
+          conclusion: String(check.conclusion || ""),
+        })),
+        failing_commit_statuses: failingCommitStatuses.map((status) => ({
+          context: String(status.context || ""),
+          state: String(status.state || ""),
+          description: String(status.description || "").slice(0, 240),
+        })),
+        pending_check_runs: meaningfulPendingCheckRuns.map((check) => ({
+          name: String(check.name || ""),
+          app: String(check.app?.slug || check.app?.name || ""),
+          status: String(check.status || ""),
+          conclusion: String(check.conclusion || ""),
+        })),
+        pending_commit_statuses: pendingCommitStatuses.map((status) => ({
+          context: String(status.context || ""),
+          state: String(status.state || ""),
+          description: String(status.description || "").slice(0, 240),
+        })),
+      },
     };
   }
 
@@ -309,6 +333,7 @@ module.exports = async function handler(request, response) {
         ? "Pull request checks are unsuccessful"
         : "Pull request checks are still pending after verification wait",
       retryable: !checkGate.blocked,
+      check_diagnostics: checkGate.diagnostics,
     });
   }
 
@@ -355,10 +380,6 @@ module.exports = async function handler(request, response) {
   }
 
   if (!merge?.ok || !merge?.data?.merged) {
-    // A merge request can race with GitHub's state propagation: the PUT may
-    // return a denial while the PR becomes merged immediately afterward.
-    // Reconcile against the authoritative PR record before telling the phone
-    // that the merge failed.
     await wait(MERGE_RETRY_MS);
     const reconciled = await github(`${baseUrl}/pulls/${prNumber}`, githubToken);
 
