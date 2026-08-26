@@ -1,0 +1,27 @@
+{
+  "contract_version": 1,
+  "name": "pilot-release-bundle-readiness",
+  "purpose": "Compute whether a multi-change release bundle is ready for explicit promotion without invoking a deployment provider.",
+  "inputs": [
+    "release_candidate_id",
+    "source_package_ids",
+    "verification_results",
+    "bundle_manifest"
+  ],
+  "statuses": ["READY", "BLOCKED"],
+  "rules": {
+    "ready": "READY only when every included source package has a PASSED required verification result and the bundle manifest is complete.",
+    "blocked": "Any missing, failed, or blocked required verification result produces BLOCKED with deterministic reasons.",
+    "no_deployment": "Readiness evaluation must not invoke the deployment adapter.",
+    "traceability": "Readiness evidence must identify every included package and verification result.",
+    "promotion": "READY permits consideration for APPROVED_FOR_RELEASE but does not itself approve or deploy."
+  },
+  "output_fields": [
+    "release_candidate_id",
+    "status",
+    "included_packages",
+    "verification_evidence",
+    "blocking_reasons",
+    "evaluated_at"
+  ]
+}
