@@ -306,12 +306,15 @@
       const resumeLastButton = document.querySelector("#resume-last-button");
       const status = document.querySelector("#status");
       const results = document.querySelector("#results");
-      const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v1";
+      const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v2";
       let approvedPackage = null;
 
       function rememberPendingPackage(command) {
         try {
-          sessionStorage.setItem(PENDING_PACKAGE_KEY, JSON.stringify(command));
+          localStorage.setItem(PENDING_PACKAGE_KEY, JSON.stringify({
+            saved_at: Date.now(),
+            command,
+          }));
         } catch {
           // Package persistence is convenience-only. Submission remains available
           // in the current page even if browser session storage is unavailable.
@@ -320,7 +323,7 @@
 
       function clearPendingPackage() {
         try {
-          sessionStorage.removeItem(PENDING_PACKAGE_KEY);
+          localStorage.removeItem(PENDING_PACKAGE_KEY);
         } catch {
           // Ignore storage cleanup failures.
         }
@@ -329,14 +332,24 @@
       function restorePendingPackage() {
         let stored = "";
         try {
-          stored = sessionStorage.getItem(PENDING_PACKAGE_KEY) || "";
+          stored = localStorage.getItem(PENDING_PACKAGE_KEY) || "";
         } catch {
           return;
         }
         if (!stored) return;
 
         try {
-          const packageInfo = validatePackage(JSON.parse(stored));
+          const saved = JSON.parse(stored);
+          if (
+            !saved ||
+            typeof saved !== "object" ||
+            typeof saved.saved_at !== "number" ||
+            Date.now() - saved.saved_at > 30 * 60 * 1000
+          ) {
+            clearPendingPackage();
+            return;
+          }
+          const packageInfo = validatePackage(saved.command);
           approvedPackage = packageInfo.command;
           showPackageReview(packageInfo);
           showStatus("Recovered the package you were reviewing. Confirm it before submitting.");
