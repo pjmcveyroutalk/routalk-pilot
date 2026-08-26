@@ -1,0 +1,22 @@
+{
+  "contract_version": 1,
+  "name": "pilot-release-promotion",
+  "purpose": "Define the explicit promotion boundary between a verified release candidate and deployment-adapter invocation.",
+  "source_state": "RELEASE_CANDIDATE",
+  "promotion_state": "APPROVED_FOR_RELEASE",
+  "deployment_state": "DEPLOYING",
+  "requirements": [
+    "release candidate status is READY",
+    "all required provider-independent verification results are PASSED",
+    "explicit release approval is recorded",
+    "configured deployment adapter is identified"
+  ],
+  "rules": {
+    "no_implicit_deploy": "A release candidate must never invoke deployment merely by existing or being validated.",
+    "approval_required": "Deployment adapter invocation requires explicit APPROVED_FOR_RELEASE promotion.",
+    "provider_neutral": "Core promotion policy must not depend on Vercel-specific fields.",
+    "verification_preserved": "Development verification evidence remains attached to the promoted release.",
+    "production_completion": "Deployment success alone does not equal PRODUCTION_VERIFIED."
+  },
+  "next_state": "DEPLOYING"
+}
