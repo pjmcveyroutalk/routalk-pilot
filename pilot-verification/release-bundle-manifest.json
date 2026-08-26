@@ -1,0 +1,21 @@
+{
+  "contract_version": 1,
+  "name": "pilot-release-bundle-manifest",
+  "purpose": "Bundle multiple verified development changes into one auditable release candidate before any deployment-provider invocation.",
+  "required_fields": [
+    "release_candidate_id",
+    "source_package_ids",
+    "source_revisions",
+    "verification_result_ids",
+    "bundle_status",
+    "created_at"
+  ],
+  "bundle_statuses": ["DRAFT", "READY", "BLOCKED"],
+  "rules": {
+    "verified_only": "Every included change must have a PASSED provider-independent verification result.",
+    "single_promotion": "The completed bundle is promoted as one release candidate rather than deploying each development change independently.",
+    "no_deployment": "Creating, updating, or validating the bundle must not invoke the deployment adapter.",
+    "traceability": "Each bundled change remains individually attributable to its source package and revision.",
+    "failure": "Any required failed or blocked verification keeps the bundle BLOCKED."
+  }
+}
