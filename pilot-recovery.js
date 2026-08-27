@@ -1,4 +1,5 @@
 const LAST_COMMAND_KEY = "pilot:last-command-id";
+const DEFAULT_TARGET_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
 
 function rememberCommandId(commandId) {
   if (
@@ -58,6 +59,71 @@ function formatMergeDiagnostics(diagnostics) {
   }
 
   return parts.join("\n");
+}
+
+function validRepository(value) {
+  return (
+    typeof value === "string" &&
+    /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(value)
+  );
+}
+
+function showPackageRepository(repository) {
+  const summary = document.querySelector("#package-summary");
+  if (!summary) return;
+
+  for (const term of summary.querySelectorAll("dt")) {
+    if (term.textContent === "Repository") {
+      const detail = term.nextElementSibling;
+      if (detail) detail.textContent = repository;
+      return;
+    }
+  }
+
+  const term = document.createElement("dt");
+  term.textContent = "Repository";
+  const detail = document.createElement("dd");
+  detail.textContent = repository;
+  detail.style.fontWeight = "900";
+  summary.prepend(detail);
+  summary.prepend(term);
+}
+
+function installPackageTargetVisibility() {
+  const input = document.querySelector("#package-file");
+  if (!input) return;
+
+  input.addEventListener("change", async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+
+    try {
+      const value = JSON.parse(await file.text());
+      const repository =
+        value.repository == null || value.repository === ""
+          ? DEFAULT_TARGET_REPOSITORY
+          : value.repository;
+
+      if (!validRepository(repository)) return;
+
+      setTimeout(() => {
+        const review = document.querySelector("#package-review");
+        if (review && !review.hidden) {
+          showPackageRepository(repository);
+        }
+      }, 0);
+    } catch {
+      // Main package validation owns error handling.
+    }
+  });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", installPackageTargetVisibility, {
+    once: true,
+  });
+} else {
+  installPackageTargetVisibility();
 }
 
 // Pilot's main page already displays result.error from /api/merge.
