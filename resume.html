@@ -217,7 +217,10 @@
               Authorization: `Bearer ${ephemeralSecret}`,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ pr_number: pull.number }),
+            body: JSON.stringify({
+              pr_number: pull.number,
+              repository: pull.repository,
+            }),
           });
 
           const result = await response.json().catch(() => ({}));
@@ -282,6 +285,7 @@
         secretInput.value = "";
 
         row("Command", result.command_id);
+        row("Repository", result.repository || "—");
         row("State", result.state);
         row("Storage", result.storage?.adapter);
         row("Processed", String(Boolean(result.storage?.processed)));

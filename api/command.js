@@ -7,6 +7,7 @@ const {
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10_000;
 const PRODUCTION_VERIFY_TIMEOUT_MS = 8_000;
+const DEFAULT_TARGET_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
 
 function safeEqual(left, right) {
   const a = Buffer.from(left || "");
@@ -25,6 +26,29 @@ function setSecurityHeaders(response, requestId) {
 
 function validRepositoryPart(value) {
   return /^[A-Za-z0-9_.-]{1,100}$/.test(value || "");
+}
+
+function validRepository(value) {
+  if (typeof value !== "string") return false;
+  const parts = value.split("/");
+  return (
+    parts.length === 2 &&
+    validRepositoryPart(parts[0]) &&
+    validRepositoryPart(parts[1])
+  );
+}
+
+function allowedTargetRepositories() {
+  const configured =
+    process.env.PILOT_TARGET_REPOSITORIES || DEFAULT_TARGET_REPOSITORY;
+  return [
+    ...new Set(
+      configured
+        .split(",")
+        .map((value) => value.trim())
+        .filter(validRepository),
+    ),
+  ];
 }
 
 function validCommandId(value) {
@@ -176,6 +200,23 @@ function deriveState(queueRecord, pullRequest, deployment, verification) {
   return COMMAND_STATES.COMPLETED;
 }
 
+function createStore(repository, githubToken) {
+  return createGithubIssueCommandStore({
+    baseUrl: `${GITHUB_API}/repos/${repository}`,
+    githubToken,
+    githubRequest: github,
+  });
+}
+
+async function findPullRequestAcrossTargets(commandId, githubToken) {
+  for (const repository of allowedTargetRepositories()) {
+    const store = createStore(repository, githubToken);
+    const pullRequest = await store.findPullRequestByCommandId(commandId);
+    if (pullRequest) return { repository, pullRequest };
+  }
+  return { repository: null, pullRequest: null };
+}
+
 module.exports = async function handler(request, response) {
   const requestId = crypto.randomUUID();
   setSecurityHeaders(response, requestId);
@@ -226,20 +267,17 @@ module.exports = async function handler(request, response) {
     });
   }
 
-  const baseUrl = `${GITHUB_API}/repos/${owner}/${repository}`;
-  const store = createGithubIssueCommandStore({
-    baseUrl,
-    githubToken,
-    githubRequest: github,
-  });
+  const controlRepository = `${owner}/${repository}`;
+  const controlStore = createStore(controlRepository, githubToken);
 
   let queueRecord;
+  let targetRepository;
   let pullRequest;
   try {
-    [queueRecord, pullRequest] = await Promise.all([
-      store.findByCommandId(commandId),
-      store.findPullRequestByCommandId(commandId),
-    ]);
+    queueRecord = await controlStore.findByCommandId(commandId);
+    const found = await findPullRequestAcrossTargets(commandId, githubToken);
+    targetRepository = found.repository;
+    pullRequest = found.pullRequest;
   } catch (error) {
     console.error("Pilot command lookup failed", {
       requestId,
@@ -263,11 +301,31 @@ module.exports = async function handler(request, response) {
   let deploymentObservation = null;
   let productionVerification = null;
 
-  if (pullRequest?.merged_at) {
-    [deploymentObservation, productionVerification] = await Promise.all([
-      observeDeployment(baseUrl, githubToken, mergedRevision),
-      verifyProduction(request, triggerSecret, mergedRevision),
-    ]);
+  if (pullRequest?.merged_at && targetRepository) {
+    const targetBaseUrl = `${GITHUB_API}/repos/${targetRepository}`;
+    deploymentObservation = await observeDeployment(
+      targetBaseUrl,
+      githubToken,
+      mergedRevision,
+    );
+
+    if (targetRepository === controlRepository) {
+      productionVerification = await verifyProduction(
+        request,
+        triggerSecret,
+        mergedRevision,
+      );
+    } else {
+      productionVerification = {
+        checked: false,
+        ready: false,
+        revision_match: false,
+        expected_revision: mergedRevision,
+        observed_revision: null,
+        state: "TARGET_VERIFICATION_PENDING",
+        verified_at: null,
+      };
+    }
   }
 
   const state = deriveState(
@@ -279,10 +337,11 @@ module.exports = async function handler(request, response) {
 
   return response.status(200).json({
     command_id: commandId,
+    repository: targetRepository,
     state,
     state_source: "pilot_command_model",
     storage: {
-      adapter: store.name,
+      adapter: controlStore.name,
       record: queueRecord.number,
       processed: queueRecord.state === "closed",
       created_at: queueRecord.created_at,
@@ -290,6 +349,7 @@ module.exports = async function handler(request, response) {
     },
     pull_request: pullRequest
       ? {
+          repository: targetRepository,
           number: pullRequest.number,
           title: pullRequest.title,
           state: pullRequest.state,
@@ -307,8 +367,10 @@ module.exports = async function handler(request, response) {
 };
 
 module.exports._test = {
+  allowedTargetRepositories,
   deriveState,
   observeDeployment,
   validCommandId,
+  validRepository,
   validSha,
 };
