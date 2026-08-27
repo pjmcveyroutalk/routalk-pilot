@@ -22,6 +22,8 @@ jobs:
       SHEET_NAME: "Commands"
       SHEET_GID: "1010314347"
       GH_TOKEN: ${{ secrets.PILOT_TARGET_GITHUB_TOKEN }}
+      PILOT_DEFAULT_REPOSITORY: "pjmcveyroutalk/routalk-pilot"
+      PILOT_TARGET_REPOSITORIES: "pjmcveyroutalk/routalk-pilot,pjmcveyroutalk/sport-my-fitness"
 
     steps:
       - name: Check out main
@@ -29,6 +31,13 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.PILOT_TARGET_GITHUB_TOKEN }}
+
+      - name: Configure authenticated Git access
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh auth setup-git
 
       - name: Fetch command queue
         shell: bash
@@ -84,6 +93,22 @@ jobs:
               "Command queue CSV verified. Headers: "
               + ", ".join(header)
           )
+
+          if "target_repository" in header:
+              print(
+                  "External repository routing column: "
+                  "target_repository"
+              )
+          elif "repository" in header:
+              print(
+                  "External repository routing column: "
+                  "repository"
+              )
+          else:
+              print(
+                  "No repository routing column found. "
+                  "Commands will default to routalk-pilot."
+              )
           PY
 
       - name: Process ready commands
@@ -95,11 +120,40 @@ jobs:
           import base64
           import csv
           import json
+          import os
           import re
           import subprocess
           from pathlib import Path
 
           CSV_PATH = "/tmp/chatgpt-commands.csv"
+
+          DEFAULT_REPOSITORY = (
+              os.environ.get(
+                  "PILOT_DEFAULT_REPOSITORY",
+                  "pjmcveyroutalk/routalk-pilot",
+              )
+              .strip()
+              .lower()
+          )
+
+          ALLOWED_REPOSITORIES = {
+              item.strip().lower()
+              for item in os.environ.get(
+                  "PILOT_TARGET_REPOSITORIES",
+                  "",
+              ).split(",")
+              if item.strip()
+          }
+
+          if not ALLOWED_REPOSITORIES:
+              raise SystemExit(
+                  "PILOT_TARGET_REPOSITORIES is empty"
+              )
+
+          if DEFAULT_REPOSITORY not in ALLOWED_REPOSITORIES:
+              raise SystemExit(
+                  "Default repository is not in allowlist"
+              )
 
 
           def run(args, check=True):
@@ -143,7 +197,9 @@ jobs:
                   r"[A-Za-z0-9._-]{1,80}",
                   command_id or "",
               ):
-                  raise ValueError("Invalid command_id")
+                  raise ValueError(
+                      "Invalid command_id"
+                  )
 
 
           def validate_branch(branch):
@@ -160,16 +216,25 @@ jobs:
                   or branch.endswith("/")
                   or "//" in branch
               ):
-                  raise ValueError("Unsafe branch name")
+                  raise ValueError(
+                      "Unsafe branch name"
+                  )
 
 
           def validate_target(path_text):
-              path_text = (path_text or "").strip()
+              path_text = (
+                  path_text or ""
+              ).strip()
+
               path = Path(path_text)
 
-              if not path_text or path.is_absolute():
+              if (
+                  not path_text
+                  or path.is_absolute()
+              ):
                   raise ValueError(
-                      "Target file must be a repo-relative path"
+                      "Target file must be a "
+                      "repo-relative path"
                   )
 
               if ".." in path.parts:
@@ -177,10 +242,18 @@ jobs:
                       "Path traversal is not allowed"
                   )
 
-              normalized = path_text.replace("\\", "/")
-              lowered = normalized.lower()
+              normalized = (
+                  path_text
+                  .replace("\\", "/")
+              )
 
-              if lowered.startswith(".github/workflows/"):
+              lowered = (
+                  normalized.lower()
+              )
+
+              if lowered.startswith(
+                  ".github/workflows/"
+              ):
                   raise ValueError(
                       "Bridge cannot modify workflow files"
                   )
@@ -196,7 +269,154 @@ jobs:
               return normalized
 
 
-          def remote_branch_sha(branch):
+          def normalize_repository(value):
+              repository = (
+                  value or ""
+              ).strip().lower()
+
+              if repository.startswith(
+                  "https://github.com/"
+              ):
+                  repository = repository[
+                      len("https://github.com/"):
+                  ]
+
+              repository = (
+                  repository
+                  .removesuffix(".git")
+                  .strip("/")
+              )
+
+              if not repository:
+                  repository = DEFAULT_REPOSITORY
+
+              if not re.fullmatch(
+                  r"[a-z0-9_.-]+/[a-z0-9_.-]+",
+                  repository,
+              ):
+                  raise ValueError(
+                      "Invalid target repository"
+                  )
+
+              if repository not in ALLOWED_REPOSITORIES:
+                  raise ValueError(
+                      "Target repository is not "
+                      f"allowlisted: {repository}"
+                  )
+
+              return repository
+
+
+          def repository_for_row(row):
+              raw = (
+                  row.get("target_repository")
+                  or row.get("repository")
+                  or ""
+              )
+
+              return normalize_repository(
+                  raw
+              )
+
+
+          def configure_repository(repository):
+              repository = normalize_repository(
+                  repository
+              )
+
+              remote_url = (
+                  "https://github.com/"
+                  f"{repository}.git"
+              )
+
+              result = run(
+                  [
+                      "git",
+                      "remote",
+                      "get-url",
+                      "origin",
+                  ],
+                  check=False,
+              )
+
+              if result.returncode != 0:
+                  run([
+                      "git",
+                      "remote",
+                      "add",
+                      "origin",
+                      remote_url,
+                  ])
+
+              else:
+                  run([
+                      "git",
+                      "remote",
+                      "set-url",
+                      "origin",
+                      remote_url,
+                  ])
+
+              print(
+                  "[TARGET] "
+                  f"{repository}"
+              )
+
+              return repository
+
+
+          def prepare_repository(repository):
+              repository = (
+                  configure_repository(
+                      repository
+                  )
+              )
+
+              run(
+                  [
+                      "git",
+                      "reset",
+                      "--hard",
+                  ],
+                  check=False,
+              )
+
+              run(
+                  [
+                      "git",
+                      "clean",
+                      "-fd",
+                  ],
+                  check=False,
+              )
+
+              run([
+                  "git",
+                  "fetch",
+                  "--prune",
+                  "origin",
+                  "main",
+              ])
+
+              run([
+                  "git",
+                  "checkout",
+                  "-B",
+                  "main",
+                  "origin/main",
+              ])
+
+              return repository
+
+
+          def remote_branch_sha(
+              repository,
+              branch,
+          ):
+              configure_repository(
+                  repository
+              )
+
               result = run(
                   [
                       "git",
@@ -221,18 +441,35 @@ jobs:
               return output.split()[0]
 
 
-          def remote_branch_exists(branch):
-              return remote_branch_sha(branch) is not None
+          def remote_branch_exists(
+              repository,
+              branch,
+          ):
+              return (
+                  remote_branch_sha(
+                      repository,
+                      branch,
+                  )
+                  is not None
+              )
 
 
-          def command_already_processed(command_id):
-              marker = f"Bridge command: `{command_id}`"
+          def command_already_processed(
+              repository,
+              command_id,
+          ):
+              marker = (
+                  f"Bridge command: "
+                  f"`{command_id}`"
+              )
 
               result = run(
                   [
                       "gh",
                       "pr",
                       "list",
+                      "--repo",
+                      repository,
                       "--state",
                       "all",
                       "--limit",
@@ -245,7 +482,8 @@ jobs:
 
               if result.returncode != 0:
                   raise RuntimeError(
-                      "Could not inspect PR history before execution.\n"
+                      "Could not inspect PR history "
+                      "before execution.\n"
                       + result.stderr
                   )
 
@@ -256,17 +494,24 @@ jobs:
 
               except Exception as exc:
                   raise RuntimeError(
-                      "Could not parse PR history before execution: "
+                      "Could not parse PR history "
+                      "before execution: "
                       + str(exc)
                   )
 
               for pull_request in pull_requests:
-                  body = pull_request.get("body") or ""
+                  body = (
+                      pull_request.get(
+                          "body"
+                      )
+                      or ""
+                  )
 
                   if marker in body:
                       print(
                           f"[SKIP] {command_id}: "
-                          "permanent PR-history ledger match "
+                          "permanent PR-history "
+                          "ledger match "
                           f"{pull_request.get('url')}"
                       )
                       return True
@@ -274,10 +519,23 @@ jobs:
               return False
 
 
-          def cleanup_merged_branch(branch, command_id):
+          def cleanup_merged_branch(
+              repository,
+              branch,
+              command_id,
+          ):
               validate_branch(branch)
 
-              remote_sha = remote_branch_sha(branch)
+              configure_repository(
+                  repository
+              )
+
+              remote_sha = (
+                  remote_branch_sha(
+                      repository,
+                      branch,
+                  )
+              )
 
               if not remote_sha:
                   return False
@@ -287,6 +545,8 @@ jobs:
                       "gh",
                       "pr",
                       "list",
+                      "--repo",
+                      repository,
                       "--head",
                       branch,
                       "--base",
@@ -296,7 +556,8 @@ jobs:
                       "--limit",
                       "20",
                       "--json",
-                      "number,mergedAt,headRefName,headRefOid",
+                      "number,mergedAt,"
+                      "headRefName,headRefOid",
                   ],
                   check=False,
               )
@@ -304,7 +565,8 @@ jobs:
               if result.returncode != 0:
                   print(
                       f"[WARN] {command_id}: "
-                      "could not inspect merged PRs for "
+                      "could not inspect merged "
+                      f"PRs for {repository}:"
                       f"{branch}"
                   )
                   return False
@@ -317,7 +579,8 @@ jobs:
               except Exception:
                   print(
                       f"[WARN] {command_id}: "
-                      "could not parse merged PR data for "
+                      "could not parse merged "
+                      f"PR data for {repository}:"
                       f"{branch}"
                   )
                   return False
@@ -327,13 +590,21 @@ jobs:
               for pr in prs:
                   if (
                       pr.get("mergedAt")
-                      and pr.get("headRefName") == branch
-                      and pr.get("headRefOid") == remote_sha
+                      and pr.get(
+                          "headRefName"
+                      ) == branch
+                      and pr.get(
+                          "headRefOid"
+                      ) == remote_sha
                   ):
                       matching.append(pr)
 
               if not matching:
                   return False
+
+              configure_repository(
+                  repository
+              )
 
               delete = run(
                   [
@@ -349,19 +620,22 @@ jobs:
               if delete.returncode != 0:
                   print(
                       f"[WARN] {command_id}: "
-                      "merged branch cleanup failed for "
-                      f"{branch}\n"
+                      "merged branch cleanup failed "
+                      f"for {repository}:{branch}\n"
                       f"{delete.stderr}"
                   )
                   return False
 
-              pr_number = matching[0].get(
-                  "number"
+              pr_number = (
+                  matching[0].get(
+                      "number"
+                  )
               )
 
               print(
                   f"[CLEANUP] {command_id}: "
-                  f"deleted merged branch {branch} "
+                  f"deleted {repository}:"
+                  f"{branch} "
                   f"from PR #{pr_number}"
               )
 
@@ -370,62 +644,100 @@ jobs:
 
           def apply_command(row):
               command_id = (
-                  row.get("command_id") or ""
+                  row.get("command_id")
+                  or ""
               ).strip()
 
               branch = (
-                  row.get("branch") or ""
+                  row.get("branch")
+                  or ""
               ).strip()
+
+              repository = (
+                  repository_for_row(row)
+              )
 
               target = validate_target(
                   row.get("target_file")
               )
 
-              validate_command_id(command_id)
-              validate_branch(branch)
+              validate_command_id(
+                  command_id
+              )
 
-              if command_already_processed(command_id):
+              validate_branch(
+                  branch
+              )
+
+              if command_already_processed(
+                  repository,
+                  command_id,
+              ):
                   return
 
-              if remote_branch_exists(branch):
-                  cleaned = cleanup_merged_branch(
-                      branch,
-                      command_id,
+              if remote_branch_exists(
+                  repository,
+                  branch,
+              ):
+                  cleaned = (
+                      cleanup_merged_branch(
+                          repository,
+                          branch,
+                          command_id,
+                      )
                   )
 
                   if not cleaned:
                       print(
                           f"[SKIP] {command_id}: "
-                          f"branch already exists: {branch}"
+                          "branch already exists: "
+                          f"{repository}:{branch}"
                       )
                       return
 
               commit_message = decode_b64(
-                  row.get("commit_message_b64"),
+                  row.get(
+                      "commit_message_b64"
+                  ),
                   "commit_message_b64",
               )
 
               pr_title = decode_b64(
-                  row.get("pr_title_b64"),
+                  row.get(
+                      "pr_title_b64"
+                  ),
                   "pr_title_b64",
               )
 
               pr_body = decode_b64(
-                  row.get("pr_body_b64"),
+                  row.get(
+                      "pr_body_b64"
+                  ),
                   "pr_body_b64",
               )
 
               chunks = [
-                  row.get("content_b64_1") or "",
-                  row.get("content_b64_2") or "",
-                  row.get("content_b64_3") or "",
-                  row.get("content_b64_4") or "",
+                  row.get(
+                      "content_b64_1"
+                  ) or "",
+                  row.get(
+                      "content_b64_2"
+                  ) or "",
+                  row.get(
+                      "content_b64_3"
+                  ) or "",
+                  row.get(
+                      "content_b64_4"
+                  ) or "",
               ]
 
               content_b64 = "".join(
                   chunk.strip()
                   for chunk in chunks
-                  if chunk and chunk.strip()
+                  if (
+                      chunk
+                      and chunk.strip()
+                  )
               )
 
               if not content_b64:
@@ -434,37 +746,40 @@ jobs:
                   )
 
               try:
-                  file_bytes = base64.b64decode(
-                      content_b64,
-                      validate=True,
+                  file_bytes = (
+                      base64.b64decode(
+                          content_b64,
+                          validate=True,
+                      )
                   )
 
               except Exception as exc:
                   raise ValueError(
-                      f"Invalid Base64 file content: {exc}"
+                      "Invalid Base64 "
+                      f"file content: {exc}"
                   )
 
               if len(file_bytes) > 180_000:
                   raise ValueError(
-                      "File payload exceeds 180 KB bridge limit"
+                      "File payload exceeds "
+                      "180 KB bridge limit"
                   )
 
               if not commit_message:
                   commit_message = (
-                      f"ChatGPT bridge: {command_id}"
+                      "ChatGPT bridge: "
+                      f"{command_id}"
                   )
 
               if not pr_title:
                   pr_title = (
-                      f"ChatGPT change: {command_id}"
+                      "ChatGPT change: "
+                      f"{command_id}"
                   )
 
-              run([
-                  "git",
-                  "fetch",
-                  "origin",
-                  "main",
-              ])
+              prepare_repository(
+                  repository
+              )
 
               run([
                   "git",
@@ -474,7 +789,9 @@ jobs:
                   "origin/main",
               ])
 
-              destination = Path(target)
+              destination = Path(
+                  target
+              )
 
               destination.parent.mkdir(
                   parents=True,
@@ -520,7 +837,8 @@ jobs:
               if diff.returncode == 0:
                   print(
                       f"[SKIP] {command_id}: "
-                      "requested content matches main"
+                      "requested content matches "
+                      f"{repository}:main"
                   )
                   return
 
@@ -530,6 +848,10 @@ jobs:
                   "-m",
                   commit_message,
               ])
+
+              configure_repository(
+                  repository
+              )
 
               run([
                   "git",
@@ -542,9 +864,13 @@ jobs:
               body = (
                   pr_body
                   + "\n\n---\n"
-                  + f"Bridge command: `{command_id}`\n"
-                  + "Created automatically from the "
-                  + "ChatGPT Drive command queue."
+                  + "Bridge command: "
+                  + f"`{command_id}`\n"
+                  + "Target repository: "
+                  + f"`{repository}`\n"
+                  + "Created automatically from "
+                  + "the ChatGPT Drive "
+                  + "command queue."
               ).strip()
 
               result = run(
@@ -552,6 +878,8 @@ jobs:
                       "gh",
                       "pr",
                       "create",
+                      "--repo",
+                      repository,
                       "--base",
                       "main",
                       "--head",
@@ -570,6 +898,8 @@ jobs:
                           "gh",
                           "pr",
                           "list",
+                          "--repo",
+                          repository,
                           "--head",
                           branch,
                           "--base",
@@ -584,7 +914,8 @@ jobs:
 
                   try:
                       found = json.loads(
-                          existing.stdout or "[]"
+                          existing.stdout
+                          or "[]"
                       )
 
                   except Exception:
@@ -592,13 +923,15 @@ jobs:
 
                   if not found:
                       raise RuntimeError(
-                          "Branch pushed but PR creation failed.\n"
+                          "Branch pushed but "
+                          "PR creation failed.\n"
                           + result.stderr
                       )
 
                   print(
                       f"[OK] {command_id}: "
-                      f"existing PR {found[0]}"
+                      f"existing PR "
+                      f"{found[0]}"
                   )
 
               else:
@@ -610,27 +943,40 @@ jobs:
 
           def merge_command(row):
               command_id = (
-                  row.get("command_id") or ""
+                  row.get("command_id")
+                  or ""
               ).strip()
 
-              validate_command_id(command_id)
+              validate_command_id(
+                  command_id
+              )
+
+              repository = (
+                  repository_for_row(row)
+              )
 
               raw_pr = (
-                  row.get("pr_number") or ""
+                  row.get("pr_number")
+                  or ""
               ).strip()
 
               if not raw_pr.isdigit():
                   raise ValueError(
-                      "Merge command requires numeric pr_number"
+                      "Merge command requires "
+                      "numeric pr_number"
                   )
 
-              pr_number = int(raw_pr)
+              pr_number = int(
+                  raw_pr
+              )
 
               result = run([
                   "gh",
                   "pr",
                   "view",
                   str(pr_number),
+                  "--repo",
+                  repository,
                   "--json",
                   "number,state,mergedAt,"
                   "headRefName,baseRefName,url",
@@ -642,42 +988,57 @@ jobs:
 
               if info.get("mergedAt"):
                   head_branch = str(
-                      info.get("headRefName", "")
+                      info.get(
+                          "headRefName",
+                          "",
+                      )
                   )
 
                   if head_branch.startswith(
                       "chatgpt/"
                   ):
                       cleanup_merged_branch(
+                          repository,
                           head_branch,
                           command_id,
                       )
 
                   print(
                       f"[SKIP] {command_id}: "
-                      f"PR #{pr_number} already merged"
+                      f"{repository} "
+                      f"PR #{pr_number} "
+                      "already merged"
                   )
                   return
 
               if info.get("state") != "OPEN":
                   raise ValueError(
-                      f"PR #{pr_number} is not open"
+                      f"PR #{pr_number} "
+                      "is not open"
                   )
 
-              if info.get("baseRefName") != "main":
+              if (
+                  info.get("baseRefName")
+                  != "main"
+              ):
                   raise ValueError(
-                      "Bridge only merges PRs targeting main"
+                      "Bridge only merges "
+                      "PRs targeting main"
                   )
 
               head_branch = str(
-                  info.get("headRefName", "")
+                  info.get(
+                      "headRefName",
+                      "",
+                  )
               )
 
               if not head_branch.startswith(
                   "chatgpt/"
               ):
                   raise ValueError(
-                      "Bridge only merges chatgpt/* branches"
+                      "Bridge only merges "
+                      "chatgpt/* branches"
                   )
 
               result = run(
@@ -686,6 +1047,8 @@ jobs:
                       "pr",
                       "merge",
                       str(pr_number),
+                      "--repo",
+                      repository,
                       "--squash",
                       "--delete-branch",
                   ],
@@ -694,20 +1057,27 @@ jobs:
 
               if result.returncode != 0:
                   raise RuntimeError(
-                      f"Merge failed for PR #{pr_number}. "
-                      "It may be waiting on checks.\n"
-                      f"stdout: {result.stdout}\n"
-                      f"stderr: {result.stderr}"
+                      "Merge failed for "
+                      f"{repository} "
+                      f"PR #{pr_number}. "
+                      "It may be waiting "
+                      "on checks.\n"
+                      f"stdout: "
+                      f"{result.stdout}\n"
+                      f"stderr: "
+                      f"{result.stderr}"
                   )
 
               cleanup_merged_branch(
+                  repository,
                   head_branch,
                   command_id,
               )
 
               print(
                   f"[OK] {command_id}: "
-                  f"merged PR #{pr_number}"
+                  f"merged {repository} "
+                  f"PR #{pr_number}"
               )
 
 
@@ -724,8 +1094,10 @@ jobs:
               row
               for row in rows
               if (
-                  row.get("ready") or ""
-              ).strip().upper() == "READY"
+                  row.get("ready")
+                  or ""
+              ).strip().upper()
+              == "READY"
           ]
 
           if not ready_rows:
@@ -738,14 +1110,27 @@ jobs:
 
           for row in ready_rows:
               command_id = (
-                  row.get("command_id") or ""
+                  row.get("command_id")
+                  or ""
               ).strip() or "<missing>"
 
               action = (
-                  row.get("action") or ""
+                  row.get("action")
+                  or ""
               ).strip().lower()
 
               try:
+                  repository = (
+                      repository_for_row(
+                          row
+                      )
+                  )
+
+                  print(
+                      f"[ROUTE] {command_id}: "
+                      f"{repository}"
+                  )
+
                   if action == "apply":
                       apply_command(row)
 
@@ -754,7 +1139,8 @@ jobs:
 
                   else:
                       raise ValueError(
-                          f"Unsupported action: {action}"
+                          "Unsupported action: "
+                          f"{action}"
                       )
 
               except Exception as exc:
@@ -779,8 +1165,8 @@ jobs:
               run(
                   [
                       "git",
-                      "checkout",
-                      "main",
+                      "clean",
+                      "-fd",
                   ],
                   check=False,
               )
