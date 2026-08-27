@@ -1,0 +1,7 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { LIVE_PROOF_CONFIRMATION, runGuardedLiveProviderControl } from "./live-provider-proof-control.mjs";
+const base={confirmation:LIVE_PROOF_CONFIRMATION,approvalIntent:true,sourceRevision:"a".repeat(40),releaseCandidateId:"rc-pilot-063",approver:"phone-operator",packages:[{packageId:"pilot-063-proof",verificationStatus:"PASSED"}]};
+test("missing confirmation blocks with zero provider calls",async()=>{let calls=0;const r=await runGuardedLiveProviderControl({...base,confirmation:""},{vercelClient:{deploy:async()=>{calls++;return{status:"DEPLOYED"}}},observeProduction:async()=>({})});assert.equal(calls,0);assert.equal(r.providerInvocations,0);assert.equal(r.status,"BLOCKED")});
+test("missing approval blocks with zero provider calls",async()=>{let calls=0;const r=await runGuardedLiveProviderControl({...base,approvalIntent:false},{vercelClient:{deploy:async()=>{calls++;return{status:"DEPLOYED"}}},observeProduction:async()=>({})});assert.equal(calls,0);assert.equal(r.providerInvocations,0);assert.equal(r.status,"BLOCKED")});
+test("approved control invokes provider exactly once",async()=>{let calls=0;const r=await runGuardedLiveProviderControl(base,{vercelClient:{deploy:async()=>{calls++;return{deploymentId:"dep-063",status:"DEPLOYED"}}},observeProduction:async()=>({observedRevision:base.sourceRevision,healthChecks:[{id:"canonical-root",required:true,status:"PASSED"}]})});assert.equal(calls,1);assert.equal(r.providerInvocations,1);assert.equal(r.status,"PRODUCTION_VERIFIED")});
