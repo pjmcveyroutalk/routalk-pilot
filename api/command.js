@@ -32,6 +32,10 @@ function validCommandId(value) {
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value || "");
 }
 
+function validSha(value) {
+  return /^[a-f0-9]{40}$/i.test(value || "");
+}
+
 function githubHeaders(token) {
   return {
     Accept: "application/vnd.github+json",
@@ -60,7 +64,7 @@ async function github(url, token, options = {}) {
   }
 }
 
-async function verifyProduction(request, triggerSecret) {
+async function verifyProduction(request, triggerSecret, expectedRevision) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PRODUCTION_VERIFY_TIMEOUT_MS);
 
@@ -74,12 +78,16 @@ async function verifyProduction(request, triggerSecret) {
       return {
         checked: true,
         ready: false,
+        revision_match: false,
         state: "INVALID_ORIGIN",
         verified_at: new Date().toISOString(),
       };
     }
 
-    const target = `${protocol}://${host}/api/verify-production`;
+    const query = validSha(expectedRevision)
+      ? `?expected_revision=${encodeURIComponent(expectedRevision)}`
+      : "";
+    const target = `${protocol}://${host}/api/verify-production${query}`;
 
     const result = await fetch(target, {
       method: "GET",
@@ -91,7 +99,10 @@ async function verifyProduction(request, triggerSecret) {
 
     return {
       checked: true,
-      ready: result.ok && data.state === "READY",
+      ready: result.ok && data.state === "READY" && data.revision_match === true,
+      revision_match: data.revision_match === true,
+      expected_revision: data.expected_revision || expectedRevision || null,
+      observed_revision: data.observed_revision || null,
       state: data.state || (result.ok ? "UNKNOWN" : "FAILED"),
       http_status: result.status,
       verified_at: data.verified_at || new Date().toISOString(),
@@ -100,6 +111,9 @@ async function verifyProduction(request, triggerSecret) {
     return {
       checked: true,
       ready: false,
+      revision_match: false,
+      expected_revision: expectedRevision || null,
+      observed_revision: null,
       state: error?.name === "AbortError" ? "TIMEOUT" : "FAILED",
       verified_at: new Date().toISOString(),
     };
@@ -114,7 +128,7 @@ function deriveState(queueRecord, pullRequest, productionVerification = null) {
   if (!pullRequest) return COMMAND_STATES.RUNNING;
 
   if (pullRequest.merged_at) {
-    return productionVerification?.ready
+    return productionVerification?.ready && productionVerification?.revision_match
       ? COMMAND_STATES.COMPLETED
       : COMMAND_STATES.MERGED;
   }
@@ -184,9 +198,10 @@ module.exports = async function handler(request, response) {
     });
   }
 
+  const mergedRevision = pullRequest?.merge_commit_sha || null;
   let productionVerification = null;
   if (pullRequest?.merged_at) {
-    productionVerification = await verifyProduction(request, triggerSecret);
+    productionVerification = await verifyProduction(request, triggerSecret, mergedRevision);
   }
 
   const state = deriveState(queueRecord, pullRequest, productionVerification);
@@ -208,6 +223,7 @@ module.exports = async function handler(request, response) {
           title: pullRequest.title,
           state: pullRequest.state,
           merged: Boolean(pullRequest.merged_at),
+          merge_commit_sha: mergedRevision,
           html_url: pullRequest.html_url,
           created_at: pullRequest.created_at,
           updated_at: pullRequest.updated_at,
@@ -218,4 +234,4 @@ module.exports = async function handler(request, response) {
   });
 };
 
-module.exports._test = { deriveState, validCommandId };
+module.exports._test = { deriveState, validCommandId, validSha };
