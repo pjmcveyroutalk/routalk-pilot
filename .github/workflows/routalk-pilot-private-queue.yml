@@ -29,8 +29,10 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.PILOT_TARGET_GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.PILOT_TARGET_GITHUB_TOKEN }}
       PILOT_QUEUE_SECRET: ${{ secrets.PILOT_QUEUE_SECRET }}
+      PILOT_TARGET_REPOSITORIES: "pjmcveyroutalk/routalk-pilot,pjmcveyroutalk/sport-my-fitness"
 
     steps:
       - name: Check out main
@@ -38,6 +40,13 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.PILOT_TARGET_GITHUB_TOKEN }}
+
+      - name: Configure authenticated Git access
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh auth setup-git
 
       - name: Process encrypted Pilot queue
         shell: bash
@@ -48,6 +57,16 @@ jobs:
 
           if [ -z "${PILOT_QUEUE_SECRET:-}" ]; then
             echo "PILOT_QUEUE_SECRET is not configured." >&2
+            exit 1
+          fi
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "PILOT_TARGET_GITHUB_TOKEN is not configured." >&2
+            exit 1
+          fi
+
+          if [ -z "${PILOT_TARGET_REPOSITORIES:-}" ]; then
+            echo "PILOT_TARGET_REPOSITORIES is not configured." >&2
             exit 1
           fi
 
