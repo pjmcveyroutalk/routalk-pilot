@@ -173,3 +173,19 @@ window.PilotRecovery = Object.freeze({
   resumeUrl,
   formatMergeDiagnostics,
 });
+
+// Mobile merge guard: suppress rapid duplicate taps before the page's merge
+// handler can issue a second request. The normal handler still owns all
+// success/failure UI and can re-enable the button after a genuine failure.
+const mergeTapLocks = new WeakSet();
+document.addEventListener("click", (event) => {
+  const button = event.target.closest?.(".merge-button");
+  if (!button) return;
+  if (mergeTapLocks.has(button)) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+  mergeTapLocks.add(button);
+  setTimeout(() => mergeTapLocks.delete(button), 1500);
+}, true);
