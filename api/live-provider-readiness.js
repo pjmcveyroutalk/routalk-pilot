@@ -1,6 +1,24 @@
 const crypto = require("node:crypto");
+const provider = require("../lib/providers/vercel.js");
 function safeEqual(l,r){const a=Buffer.from(l||"");const b=Buffer.from(r||"");return a.length===b.length&&crypto.timingSafeEqual(a,b)}
 function bearer(req){const v=req.headers?.authorization||"";return v.startsWith("Bearer ")?v.slice(7):""}
-async function vercelGet(path){const token=process.env.VERCEL_TOKEN||"";if(!token)return{ok:false,status:null,error:"missing_vercel_token"};try{const r=await fetch(`https://api.vercel.com${path}`,{headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},cache:"no-store"});const text=await r.text();let b={};try{b=text?JSON.parse(text):{}}catch{}return{ok:r.ok,status:r.status,error:r.ok?null:(b?.error?.code||b?.error?.message||`vercel_http_${r.status}`)}}catch(e){return{ok:false,status:null,error:e?.message||"vercel_request_failed"}}}
-module.exports=async function handler(req,res){const requestId=crypto.randomUUID();res.setHeader("Cache-Control","no-store, max-age=0");res.setHeader("Pragma","no-cache");res.setHeader("X-Content-Type-Options","nosniff");res.setHeader("X-Pilot-Request-Id",requestId);if(req.method!=="POST"){res.setHeader("Allow","POST");return res.status(405).json({ok:false,error:"method_not_allowed",requestId})}const secret=process.env.PILOT_TRIGGER_SECRET||"";if(!secret||!safeEqual(bearer(req),secret))return res.status(401).json({ok:false,error:"unauthorized",requestId});const projectId=process.env.VERCEL_PROJECT_ID||"";const teamId=process.env.VERCEL_TEAM_ID||process.env.VERCEL_ORG_ID||"";const canonical=process.env.PILOT_PRODUCTION_URL||process.env.PRODUCTION_URL||process.env.VERCEL_PROJECT_PRODUCTION_URL||"";const configured={vercelToken:Boolean(process.env.VERCEL_TOKEN),vercelProjectId:Boolean(projectId),vercelTeamId:Boolean(teamId),pilotTriggerSecret:Boolean(secret),canonicalProductionUrl:Boolean(canonical)};const project=configured.vercelToken&&configured.vercelProjectId?await vercelGet(`/v9/projects/${encodeURIComponent(projectId)}`):{ok:false,status:null,error:configured.vercelProjectId?"missing_vercel_token":"missing_vercel_project_id"};const user=configured.vercelToken?await vercelGet("/v2/user"):{ok:false,status:null,error:"missing_vercel_token"};const team=configured.vercelToken&&teamId?await vercelGet(`/v2/teams/${encodeURIComponent(teamId)}`):{ok:false,status:null,error:teamId?"missing_vercel_token":"not_configured"};const liveProviderProofReady=configured.vercelToken&&configured.vercelProjectId&&configured.pilotTriggerSecret&&configured.canonicalProductionUrl&&project.ok;return res.status(200).json({ok:true,liveProviderProofReady,readiness:configured,authorization:{projectAccessible:project.ok,projectStatus:project.status,projectError:project.error,tokenUserDiagnostic:user.ok,tokenUserStatus:user.status,tokenUserError:user.error,teamDiagnostic:team.ok,teamStatus:team.status,teamError:team.error,scopeMode:"project-resource-authoritative"},requestId})};
+module.exports=async function handler(req,res){
+  const requestId=crypto.randomUUID();
+  res.setHeader("Cache-Control","no-store, max-age=0");
+  res.setHeader("X-Pilot-Request-Id",requestId);
+  if(req.method!=="POST"){res.setHeader("Allow","POST");return res.status(405).json({ok:false,error:"method_not_allowed",requestId})}
+  const secret=process.env.PILOT_TRIGGER_SECRET||"";
+  if(!secret||!safeEqual(bearer(req),secret))return res.status(401).json({ok:false,error:"unauthorized",requestId});
+  const access=await provider.inspectProjectAccess();
+  const base=provider.sanitizedStatus();
+  const liveProviderProofReady=base.configured.token&&base.configured.project&&base.configured.productionUrl&&Boolean(secret)&&access.ok;
+  return res.status(200).json({
+    ok:true,
+    liveProviderProofReady,
+    providerSubsystem:base.providerSubsystem,
+    readiness:{...base.configured,pilotTriggerSecret:Boolean(secret)},
+    authorization:{projectAccessible:access.ok,projectStatus:access.status,projectError:access.error},
+    requestId
+  });
+};
 module.exports._test={safeEqual,bearer};
