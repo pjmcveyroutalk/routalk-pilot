@@ -1,5 +1,15 @@
 const LAST_COMMAND_KEY = "pilot:last-command-id";
+const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v2";
 const DEFAULT_TARGET_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
+
+// Pending build packages are intentionally not restored across page loads.
+// A stale package can otherwise trap mobile users on an already-submitted
+// command and prevent a newly selected package from replacing it.
+try {
+  localStorage.removeItem(PENDING_PACKAGE_KEY);
+} catch {
+  // Storage cleanup is best-effort only.
+}
 
 function rememberCommandId(commandId) {
   if (
@@ -126,10 +136,8 @@ if (document.readyState === "loading") {
   installPackageTargetVisibility();
 }
 
-// Pilot's main page already displays result.error from /api/merge.
-// Enrich only that response so the phone sees the exact blocker returned
-// by the protected merge API without changing any merge/check behavior.
 const originalFetch = window.fetch.bind(window);
+
 window.fetch = async function pilotDiagnosticFetch(input, init) {
   const response = await originalFetch(input, init);
 
@@ -174,18 +182,22 @@ window.PilotRecovery = Object.freeze({
   formatMergeDiagnostics,
 });
 
-// Mobile merge guard: suppress rapid duplicate taps before the page's merge
-// handler can issue a second request. The normal handler still owns all
-// success/failure UI and can re-enable the button after a genuine failure.
 const mergeTapLocks = new WeakSet();
-document.addEventListener("click", (event) => {
-  const button = event.target.closest?.(".merge-button");
-  if (!button) return;
-  if (mergeTapLocks.has(button)) {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    return;
-  }
-  mergeTapLocks.add(button);
-  setTimeout(() => mergeTapLocks.delete(button), 1500);
-}, true);
+
+document.addEventListener(
+  "click",
+  (event) => {
+    const button = event.target.closest?.(".merge-button");
+    if (!button) return;
+
+    if (mergeTapLocks.has(button)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    mergeTapLocks.add(button);
+    setTimeout(() => mergeTapLocks.delete(button), 1500);
+  },
+  true,
+);
