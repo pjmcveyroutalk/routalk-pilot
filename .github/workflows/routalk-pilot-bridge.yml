@@ -21,7 +21,7 @@ jobs:
       SHEET_ID: "1KU9wp8B0ekuWhEJr7escH-wUgZUXAXg20V0bF6IzTWE"
       SHEET_NAME: "Commands"
       SHEET_GID: "1010314347"
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.PILOT_TARGET_GITHUB_TOKEN }}
 
     steps:
       - name: Check out main
