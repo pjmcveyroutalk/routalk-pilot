@@ -8,4 +8,4 @@ Phone -> import reviewed `.pilot` package -> submit -> Pilot creates isolated `c
 ## Canonical architecture
 See `docs/ARCHITECTURE.md`, `docs/COMMAND_CONTRACT.md`, `docs/OPERATIONS.md`, and `docs/RELEASE_VERIFICATION.md`. Historical proof and diagnostic files are not active architecture unless one of those documents explicitly references them.
 
-Status: stabilization/hygiene after the verified external-repository E2E lifecycle.
+Status: canonical phone-first control loop proven for both successful and terminal-failure paths; checkpointed for the next build phase.
