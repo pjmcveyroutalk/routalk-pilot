@@ -20,5 +20,8 @@
 - Do not place secrets in packages, repository documentation, logs, or user-visible instructions.
 - Server-side command state is authoritative; mobile local state is convenience only.
 
+## Canonical proof
+A release-path proof is complete only when one phone-submitted command travels through the encrypted queue, deterministic verification, PR creation, explicit Pilot merge approval, deployment observation, exact production revision verification, and finally reports `COMPLETED` on the phone.
+
 ## Recovery
 Before destructive cleanup or future deletion support, freeze a known-good commit, record the active architecture/state, inventory every affected path, and confirm a straightforward rollback. See `docs/RECOVERY_CHECKPOINT.md` and `docs/RETIREMENT_INVENTORY.md`.
