@@ -1,42 +1,13 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
-
-const MAX_FILES = 20;
-const MAX_FILE_BYTES = 32_000;
-const MAX_TOTAL_FILE_BYTES = 32_000;
-const DEFAULT_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
+const {
+  DEFAULT_REPOSITORY,
+  resolveRepository,
+  validateCommand,
+} = require("../lib/command-contract");
 
 function fail(message) { throw new Error(message); }
-function validCommandId(value) { return /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value || ""); }
-function validBranch(value) {
-  return /^chatgpt\/[A-Za-z0-9._/-]{1,120}$/.test(value || "") &&
-    !value.includes("..") && !value.includes("//") && !value.endsWith("/");
-}
-function validRepository(value) {
-  return /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(value || "");
-}
-function allowedRepositories() {
-  const configured = (process.env.PILOT_TARGET_REPOSITORIES || DEFAULT_REPOSITORY)
-    .split(",").map((value) => value.trim()).filter(Boolean);
-  return new Set(configured.filter(validRepository));
-}
-function resolveRepository(command) {
-  const repository = command.repository || DEFAULT_REPOSITORY;
-  if (!validRepository(repository) || !allowedRepositories().has(repository)) {
-    fail("Pilot target repository is not allowlisted");
-  }
-  return repository;
-}
-function validTarget(value) {
-  if (typeof value !== "string" || value.length < 1 || value.length > 240) return false;
-  const normalized = value.replaceAll("\\", "/");
-  const parts = normalized.split("/");
-  const lowered = normalized.toLowerCase();
-  return !normalized.startsWith("/") && !parts.includes("") && !parts.includes(".") &&
-    !parts.includes("..") && !lowered.startsWith(".git/") && lowered !== ".git" &&
-    !lowered.startsWith(".github/workflows/");
-}
 function decryptEnvelope(envelope, secret) {
   if (!envelope || envelope.version !== 1 || envelope.algorithm !== "A256GCM" ||
       typeof envelope.iv !== "string" || typeof envelope.tag !== "string" ||
@@ -49,30 +20,6 @@ function decryptEnvelope(envelope, secret) {
       decipher.update(Buffer.from(envelope.ciphertext, "base64")), decipher.final()
     ]).toString("utf8"));
   } catch { fail("Pilot queue command authentication failed"); }
-}
-function validateCommand(command) {
-  if (!command || command.version !== 1 || !validCommandId(command.command_id)) fail("Invalid Pilot queue command id");
-  if (!new Set(["apply", "merge"]).has(command.action)) fail("Unsupported Pilot queue action");
-  resolveRepository(command);
-  if (command.action === "merge") {
-    if (!Number.isSafeInteger(command.pr_number) || command.pr_number < 1) fail("Invalid merge pull request number");
-    return command;
-  }
-  if (!validBranch(command.branch)) fail("Invalid Pilot queue branch");
-  if (!Array.isArray(command.files) || command.files.length < 1 || command.files.length > MAX_FILES)
-    fail(`Pilot queue apply command must contain 1 to ${MAX_FILES} files`);
-  const paths = new Set(); let totalBytes = 0;
-  for (const file of command.files) {
-    if (!file || !validTarget(file.path) || paths.has(file.path)) fail("Invalid or duplicate Pilot queue target path");
-    paths.add(file.path);
-    if (typeof file.content_b64 !== "string") fail("Invalid Pilot queue file payload");
-    const content = Buffer.from(file.content_b64, "base64");
-    if (content.length > MAX_FILE_BYTES || content.toString("base64") !== file.content_b64)
-      fail("Invalid or oversized Pilot queue file payload");
-    totalBytes += content.length;
-  }
-  if (totalBytes > MAX_TOTAL_FILE_BYTES) fail("Pilot queue command payload is too large");
-  return command;
 }
 function run(args, options = {}) {
   const result = spawnSync(args[0], args.slice(1), { cwd: options.cwd, encoding: "utf8", env: process.env });
@@ -142,4 +89,4 @@ function main() {
   if (command.action === "apply") processApply(command); else processMerge(command);
 }
 if (require.main === module) { try { main(); } catch(error) { console.error(`[ERROR] ${error.message || error}`); process.exitCode=1; } }
-module.exports = { decryptEnvelope, validBranch, validCommandId, validRepository, validTarget, validateCommand };
+module.exports = { decryptEnvelope, validateCommand };
