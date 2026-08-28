@@ -64,9 +64,7 @@ function allowedTargetRepositories() {
 function normalizeTargetRepository(value) {
   const repository =
     value == null || value === "" ? DEFAULT_TARGET_REPOSITORY : value;
-  if (!validRepository(repository)) {
-    throw new Error("repository is invalid");
-  }
+  if (!validRepository(repository)) throw new Error("repository is invalid");
   if (!allowedTargetRepositories().has(repository)) {
     throw new Error("repository is not allowlisted");
   }
@@ -91,9 +89,7 @@ function validBranch(value) {
 }
 
 function validTarget(value) {
-  if (typeof value !== "string" || value.length < 1 || value.length > 240) {
-    return false;
-  }
+  if (typeof value !== "string" || value.length < 1 || value.length > 240) return false;
   const normalized = value.replaceAll("\\", "/");
   const parts = normalized.split("/");
   const lowered = normalized.toLowerCase();
@@ -111,11 +107,7 @@ function validTarget(value) {
 function readBody(request) {
   if (!request.body) return {};
   if (typeof request.body === "object") return request.body;
-  try {
-    return JSON.parse(request.body);
-  } catch {
-    return {};
-  }
+  try { return JSON.parse(request.body); } catch { return {}; }
 }
 
 function validateText(value, field, maxLength, required = false) {
@@ -147,39 +139,21 @@ function normalizeCommand(body) {
     if (!Number.isSafeInteger(prNumber) || prNumber < 1) {
       throw new Error("pr_number is invalid");
     }
-    return {
-      version: 1,
-      command_id: commandId,
-      action,
-      repository,
-      pr_number: prNumber,
-    };
+    return { version: 1, command_id: commandId, action, repository, pr_number: prNumber };
   }
 
   const branch = validateText(body.branch, "branch", 128, true);
   if (!validBranch(branch)) throw new Error("branch is invalid");
 
-  if (
-    !Array.isArray(body.files) ||
-    body.files.length < 1 ||
-    body.files.length > MAX_FILES
-  ) {
+  if (!Array.isArray(body.files) || body.files.length < 1 || body.files.length > MAX_FILES) {
     throw new Error(`files must contain 1 to ${MAX_FILES} entries`);
   }
 
   const seenTargets = new Set();
   let totalBytes = 0;
   const files = body.files.map((file, index) => {
-    if (!file || typeof file !== "object") {
-      throw new Error(`files[${index}] is invalid`);
-    }
-
-    const path = validateText(
-      file.path,
-      `files[${index}].path`,
-      240,
-      true,
-    ).replaceAll("\\", "/");
+    if (!file || typeof file !== "object") throw new Error(`files[${index}] is invalid`);
+    const path = validateText(file.path, `files[${index}].path`, 240, true).replaceAll("\\", "/");
     if (!validTarget(path)) throw new Error(`files[${index}].path is unsafe`);
     if (seenTargets.has(path)) throw new Error(`duplicate target path: ${path}`);
     seenTargets.add(path);
@@ -190,22 +164,15 @@ function normalizeCommand(body) {
       Math.ceil((MAX_FILE_BYTES * 4) / 3) + 8,
       true,
     );
-    const content = Buffer.from(contentBase64, "base64");
-    if (
-      content.length > MAX_FILE_BYTES ||
-      content.toString("base64") !== contentBase64
-    ) {
-      throw new Error(
-        `files[${index}].content_b64 is invalid or too large`,
-      );
+    const decoded = Buffer.from(contentBase64, "base64");
+    if (decoded.length > MAX_FILE_BYTES || decoded.toString("base64") !== contentBase64) {
+      throw new Error(`files[${index}].content_b64 is invalid or too large`);
     }
-    totalBytes += content.length;
+    totalBytes += decoded.length;
     return { path, content_b64: contentBase64 };
   });
 
-  if (totalBytes > MAX_TOTAL_FILE_BYTES) {
-    throw new Error("combined file payload is too large");
-  }
+  if (totalBytes > MAX_TOTAL_FILE_BYTES) throw new Error("combined file payload is too large");
 
   return {
     version: 1,
@@ -214,11 +181,7 @@ function normalizeCommand(body) {
     repository,
     branch,
     files,
-    commit_message: validateText(
-      body.commit_message,
-      "commit_message",
-      200,
-    ),
+    commit_message: validateText(body.commit_message, "commit_message", 200),
     pr_title: validateText(body.pr_title, "pr_title", 200),
     pr_body: validateText(body.pr_body, "pr_body", 8_000),
   };
@@ -229,10 +192,7 @@ function encryptCommand(command, secret) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
   const plaintext = Buffer.from(JSON.stringify(command));
-  const ciphertext = Buffer.concat([
-    cipher.update(plaintext),
-    cipher.final(),
-  ]);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   return {
     version: 1,
     algorithm: "A256GCM",
@@ -258,20 +218,13 @@ async function github(url, token, options = {}) {
   try {
     const result = await fetch(url, {
       ...options,
-      headers: {
-        ...githubHeaders(token),
-        ...(options.headers || {}),
-      },
+      headers: { ...githubHeaders(token), ...(options.headers || {}) },
       signal: controller.signal,
     });
     const data = await result.json().catch(() => ({}));
     return { ok: result.ok, status: result.status, data };
   } catch (error) {
-    return {
-      ok: false,
-      status: 0,
-      timedOut: error?.name === "AbortError",
-    };
+    return { ok: false, status: 0, timedOut: error?.name === "AbortError" };
   } finally {
     clearTimeout(timeout);
   }
@@ -283,67 +236,42 @@ module.exports = async function handler(request, response) {
 
   if (request.method !== "POST") {
     response.setHeader("Allow", "POST");
-    return send(response, 405, requestId, {
-      error: "Method not allowed",
-    });
+    return send(response, 405, requestId, { error: "Method not allowed" });
   }
 
-  const contentLength = Number(
-    request.headers["content-length"] || 0,
-  );
-  if (
-    !Number.isFinite(contentLength) ||
-    contentLength > MAX_BODY_BYTES
-  ) {
-    return send(response, 413, requestId, {
-      error: "Request body is too large",
-    });
+  const contentLength = Number(request.headers["content-length"] || 0);
+  if (!Number.isFinite(contentLength) || contentLength > MAX_BODY_BYTES) {
+    return send(response, 413, requestId, { error: "Request body is too large" });
   }
 
   const triggerSecret = process.env.PILOT_TRIGGER_SECRET;
   const queueSecret = process.env.PILOT_QUEUE_SECRET;
   const githubToken = process.env.PILOT_GITHUB_TOKEN;
   if (!triggerSecret || !queueSecret || !githubToken) {
-    return send(response, 503, requestId, {
-      error: "Pilot queue is not configured",
-    });
+    return send(response, 503, requestId, { error: "Pilot queue is not configured" });
   }
 
   const authorization = request.headers.authorization || "";
-  const suppliedSecret = authorization.startsWith("Bearer ")
-    ? authorization.slice(7)
-    : "";
+  const suppliedSecret = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   if (!safeEqual(suppliedSecret, triggerSecret)) {
-    return send(response, 401, requestId, {
-      error: "Unauthorized",
-    });
+    return send(response, 401, requestId, { error: "Unauthorized" });
   }
 
   let command;
-  try {
-    command = normalizeCommand(readBody(request));
-  } catch (error) {
-    return send(response, 400, requestId, {
-      error: error.message || "Invalid command",
-    });
+  try { command = normalizeCommand(readBody(request)); }
+  catch (error) {
+    return send(response, 400, requestId, { error: error.message || "Invalid command" });
   }
 
-  const owner =
-    process.env.PILOT_GITHUB_OWNER || "pjmcveyroutalk";
-  const repository =
-    process.env.PILOT_GITHUB_REPO || "routalk-pilot";
+  const owner = process.env.PILOT_GITHUB_OWNER || "pjmcveyroutalk";
+  const repository = process.env.PILOT_GITHUB_REPO || "routalk-pilot";
   const workflow =
     process.env.PILOT_GITHUB_WORKFLOW ||
-    "routalk-pilot-bridge.yml";
+    "routalk-pilot-private-queue.yml";
   const mainRef = process.env.PILOT_GITHUB_REF || "main";
-  if (
-    !validRepositoryPart(owner) ||
-    !validRepositoryPart(repository) ||
-    !validWorkflow(workflow)
-  ) {
-    return send(response, 503, requestId, {
-      error: "Pilot queue configuration is invalid",
-    });
+
+  if (!validRepositoryPart(owner) || !validRepositoryPart(repository) || !validWorkflow(workflow)) {
+    return send(response, 503, requestId, { error: "Pilot queue configuration is invalid" });
   }
 
   const baseUrl = `${GITHUB_API}/repos/${owner}/${repository}`;
@@ -360,29 +288,15 @@ module.exports = async function handler(request, response) {
     commandRecord = await store.enqueue(command, envelope);
   } catch (error) {
     if (error.code === "DUPLICATE_COMMAND") {
-      return send(response, 409, requestId, {
-        error: error.message,
-      });
+      return send(response, 409, requestId, { error: error.message });
     }
     if (error.code === "PAYLOAD_TOO_LARGE") {
-      return send(response, 413, requestId, {
-        error: error.message,
-      });
+      return send(response, 413, requestId, { error: error.message });
     }
-    console.error("Pilot command storage failed", {
-      requestId,
-      code: error.code,
+    console.error("Pilot command storage failed", { requestId, code: error.code });
+    return send(response, error.timedOut ? 504 : 502, requestId, {
+      error: error.message || "Pilot command could not be queued",
     });
-    return send(
-      response,
-      error.timedOut ? 504 : 502,
-      requestId,
-      {
-        error:
-          error.message ||
-          "Pilot command could not be queued",
-      },
-    );
   }
 
   const dispatched = await github(
@@ -392,10 +306,7 @@ module.exports = async function handler(request, response) {
       method: "POST",
       body: JSON.stringify({
         ref: mainRef,
-        inputs: {
-          source: "pilot_queue",
-          command_id: command.command_id,
-        },
+        inputs: { source: "pilot_queue", command_id: command.command_id },
       }),
     },
   );
@@ -407,29 +318,22 @@ module.exports = async function handler(request, response) {
       { metadata: { dispatch_started: true } },
     );
   } else {
-    console.warn(
-      "Pilot command queued; immediate dispatch failed",
-      {
-        requestId,
-        status: dispatched.status,
-      },
-    );
+    console.warn("Pilot command queued; immediate dispatch failed", {
+      requestId,
+      status: dispatched.status,
+    });
   }
 
   return send(response, 202, requestId, {
     accepted: true,
     command_id: command.command_id,
     repository: command.repository,
-    resume_url: `/resume.html?command_id=${encodeURIComponent(
-      command.command_id,
-    )}`,
+    resume_url: `/resume.html?command_id=${encodeURIComponent(command.command_id)}`,
     queue_record: commandRecord.storage_record,
     state: commandRecord.state,
     command_record: commandRecord,
     dispatch_started: dispatched.ok,
-    recovery: dispatched.ok
-      ? undefined
-      : "The scheduled recovery cycle will process this command",
+    recovery: dispatched.ok ? undefined : "The scheduled recovery cycle will process this command",
   });
 };
 
