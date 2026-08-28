@@ -103,21 +103,155 @@ async function observeDeployment(baseUrl, token, revision) {
   }
 
   const statuses = Array.isArray(result.data.statuses) ? result.data.statuses : [];
-  const vercel = statuses.find(
-    (status) => String(status.context || "").toLowerCase() === "vercel",
+  const successful = statuses.find((status) => status.state === "success");
+  const pending = statuses.find(
+    (status) => status.state === "pending" || status.state === "expected",
   );
+  const failed = statuses.find(
+    (status) => status.state === "failure" || status.state === "error",
+  );
+  const observed = failed || pending || successful || statuses[0] || null;
 
   return {
     checked: true,
-    state: vercel?.state || "pending",
-    ready: vercel?.state === "success",
-    context: vercel?.context || null,
-    target_url: vercel?.target_url || null,
+    state: observed?.state || result.data.state || "pending",
+    ready: Boolean(successful) && !failed && !pending,
+    context: observed?.context || null,
+    target_url: observed?.target_url || null,
     observed_at: new Date().toISOString(),
   };
 }
 
-async function verifyProduction(request, triggerSecret, expectedRevision) {
+function parseExternalVerifiers() {
+  const raw = process.env.PILOT_TARGET_PRODUCTION_VERIFIERS || "";
+  if (!raw.trim()) return new Map();
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return new Map();
+  }
+
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+    return new Map();
+  }
+
+  const result = new Map();
+  for (const [repository, config] of Object.entries(parsed)) {
+    if (
+      !validRepository(repository) ||
+      !config ||
+      typeof config !== "object" ||
+      typeof config.url !== "string" ||
+      typeof config.secret_env !== "string"
+    ) {
+      continue;
+    }
+
+    let url;
+    try {
+      url = new URL(config.url);
+    } catch {
+      continue;
+    }
+
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.hash ||
+      !/^[A-Z][A-Z0-9_]{2,120}$/.test(config.secret_env)
+    ) {
+      continue;
+    }
+
+    result.set(repository, {
+      url: url.toString(),
+      secretEnv: config.secret_env,
+    });
+  }
+
+  return result;
+}
+
+async function verifyConfiguredTarget(repository, expectedRevision) {
+  const config = parseExternalVerifiers().get(repository);
+  if (!config) {
+    return {
+      checked: false,
+      ready: false,
+      revision_match: false,
+      expected_revision: expectedRevision || null,
+      observed_revision: null,
+      state: "TARGET_VERIFICATION_NOT_CONFIGURED",
+      verified_at: null,
+    };
+  }
+
+  const secret = process.env[config.secretEnv] || "";
+  if (!secret) {
+    return {
+      checked: false,
+      ready: false,
+      revision_match: false,
+      expected_revision: expectedRevision || null,
+      observed_revision: null,
+      state: "TARGET_VERIFICATION_SECRET_MISSING",
+      verified_at: null,
+    };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PRODUCTION_VERIFY_TIMEOUT_MS);
+
+  try {
+    const target = new URL(config.url);
+    if (validSha(expectedRevision)) {
+      target.searchParams.set("expected_revision", expectedRevision);
+    }
+
+    const result = await fetch(target, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${secret}`,
+        Accept: "application/json",
+      },
+      cache: "no-store",
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    const data = await result.json().catch(() => ({}));
+
+    return {
+      checked: true,
+      ready:
+        result.ok &&
+        data.state === "READY" &&
+        data.revision_match === true,
+      revision_match: data.revision_match === true,
+      expected_revision: data.expected_revision || expectedRevision || null,
+      observed_revision: data.observed_revision || null,
+      state: data.state || (result.ok ? "UNKNOWN" : "FAILED"),
+      http_status: result.status,
+      verified_at: data.verified_at || new Date().toISOString(),
+    };
+  } catch (error) {
+    return {
+      checked: true,
+      ready: false,
+      revision_match: false,
+      expected_revision: expectedRevision || null,
+      observed_revision: null,
+      state: error?.name === "AbortError" ? "TIMEOUT" : "FAILED",
+      verified_at: new Date().toISOString(),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function verifyControlProduction(request, triggerSecret, expectedRevision) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PRODUCTION_VERIFY_TIMEOUT_MS);
 
@@ -309,23 +443,10 @@ module.exports = async function handler(request, response) {
       mergedRevision,
     );
 
-    if (targetRepository === controlRepository) {
-      productionVerification = await verifyProduction(
-        request,
-        triggerSecret,
-        mergedRevision,
-      );
-    } else {
-      productionVerification = {
-        checked: false,
-        ready: false,
-        revision_match: false,
-        expected_revision: mergedRevision,
-        observed_revision: null,
-        state: "TARGET_VERIFICATION_PENDING",
-        verified_at: null,
-      };
-    }
+    productionVerification =
+      targetRepository === controlRepository
+        ? await verifyControlProduction(request, triggerSecret, mergedRevision)
+        : await verifyConfiguredTarget(targetRepository, mergedRevision);
   }
 
   const state = deriveState(
@@ -370,6 +491,7 @@ module.exports._test = {
   allowedTargetRepositories,
   deriveState,
   observeDeployment,
+  parseExternalVerifiers,
   validCommandId,
   validRepository,
   validSha,
