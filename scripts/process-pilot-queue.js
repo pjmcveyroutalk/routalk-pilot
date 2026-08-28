@@ -60,11 +60,24 @@ function prepareCommandBranch(command) {
     if (!command.branch.startsWith("chatgpt/"))
       fail(`Refusing to overwrite existing branch ${command.branch}`);
 
+    const fetched = run(["git","fetch","origin",`refs/heads/${command.branch}`], {cwd,allowFailure:true});
+    const marker = `Pilot queue command: ${command.command_id}`;
+    const tipMessage = fetched.status === 0
+      ? run(["git","log","-1","--format=%B","FETCH_HEAD"], {cwd,allowFailure:true})
+      : null;
+    const owned =
+      fetched.status === 0 &&
+      tipMessage?.status === 0 &&
+      String(tipMessage.stdout || "").includes(marker);
+
+    if (!owned)
+      fail(`Refusing to delete unverified existing branch ${command.branch}`);
+
     const cleanup = run(["git","push","origin","--delete",command.branch], {cwd,allowFailure:true});
     if (cleanup.status !== 0 || remoteBranchExists(command.branch, cwd))
       fail(`Could not recover orphaned Pilot branch ${command.branch}`);
 
-    console.log(`[RECOVERY] ${command.command_id}: removed orphaned Pilot branch ${command.branch}`);
+    console.log(`[RECOVERY] ${command.command_id}: removed verified orphaned Pilot branch ${command.branch}`);
   }
   run(["git","fetch","origin","main"], {cwd});
   run(["git","checkout","-B",command.branch,"origin/main"], {cwd});
@@ -167,7 +180,11 @@ function processApply(command) {
     if (diff.status === 0) return console.log(`[SKIP] ${command.command_id}: requested files match main`);
     verifyChangedPayloads(writtenPaths, cwd);
     verifyPreparedWorkspace(repository, cwd);
-    run(["git","commit","-m",command.commit_message || `Pilot queue: ${command.command_id}`],{cwd});
+    run([
+      "git","commit",
+      "-m",command.commit_message || `Pilot queue: ${command.command_id}`,
+      "-m",`Pilot queue command: ${command.command_id}`
+    ],{cwd});
     createPullRequest(command, repository, cwd);
   } finally { if (cwd !== process.cwd()) fs.rmSync(cwd,{recursive:true,force:true}); }
 }
@@ -235,7 +252,11 @@ function processDelete(command) {
     configureCommitter(cwd);
     run(["git","rm","--",...command.deletions.map((item) => item.path)],{cwd});
     verifyPreparedWorkspace(repository, cwd);
-    run(["git","commit","-m",command.commit_message || `Pilot delete: ${command.command_id}`],{cwd});
+    run([
+      "git","commit",
+      "-m",command.commit_message || `Pilot delete: ${command.command_id}`,
+      "-m",`Pilot queue command: ${command.command_id}`
+    ],{cwd});
     createPullRequest(command, repository, cwd);
   } finally { if (cwd !== process.cwd()) fs.rmSync(cwd,{recursive:true,force:true}); }
 }
