@@ -16,11 +16,13 @@ function rememberCommandId(commandId) {
     localStorage.setItem(LAST_COMMAND_KEY, commandId);
     return true;
   }
+
   return false;
 }
 
 function readLastCommandId() {
   const value = localStorage.getItem(LAST_COMMAND_KEY);
+
   return value && /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value)
     ? value
     : null;
@@ -37,31 +39,41 @@ function resumeUrl(commandId = readLastCommandId()) {
 }
 
 function formatMergeDiagnostics(diagnostics) {
-  if (!diagnostics || typeof diagnostics !== "object") return "";
+  if (!diagnostics || typeof diagnostics !== "object") {
+    return "";
+  }
 
   const parts = [];
 
   for (const check of diagnostics.failing_check_runs || []) {
     parts.push(
-      `Check failed: ${check.name || "unnamed check"}${check.app ? ` (${check.app})` : ""} — ${check.conclusion || check.status || "failed"}`,
+      `Check failed: ${check.name || "unnamed check"}${
+        check.app ? ` (${check.app})` : ""
+      } — ${check.conclusion || check.status || "failed"}`,
     );
   }
 
   for (const status of diagnostics.failing_commit_statuses || []) {
     parts.push(
-      `Status failed: ${status.context || "unnamed status"} — ${status.state || "failure"}${status.description ? `: ${status.description}` : ""}`,
+      `Status failed: ${status.context || "unnamed status"} — ${
+        status.state || "failure"
+      }${status.description ? `: ${status.description}` : ""}`,
     );
   }
 
   for (const check of diagnostics.pending_check_runs || []) {
     parts.push(
-      `Check pending: ${check.name || "unnamed check"}${check.app ? ` (${check.app})` : ""} — ${check.status || "pending"}`,
+      `Check pending: ${check.name || "unnamed check"}${
+        check.app ? ` (${check.app})` : ""
+      } — ${check.status || "pending"}`,
     );
   }
 
   for (const status of diagnostics.pending_commit_statuses || []) {
     parts.push(
-      `Status pending: ${status.context || "unnamed status"}${status.description ? `: ${status.description}` : ""}`,
+      `Status pending: ${status.context || "unnamed status"}${
+        status.description ? `: ${status.description}` : ""
+      }`,
     );
   }
 
@@ -77,12 +89,19 @@ function validRepository(value) {
 
 function showPackageRepository(repository) {
   const summary = document.querySelector("#package-summary");
-  if (!summary) return;
+
+  if (!summary) {
+    return;
+  }
 
   for (const term of summary.querySelectorAll("dt")) {
     if (term.textContent === "Repository") {
       const detail = term.nextElementSibling;
-      if (detail) detail.textContent = repository;
+
+      if (detail) {
+        detail.textContent = repository;
+      }
+
       return;
     }
   }
@@ -98,55 +117,102 @@ function showPackageRepository(repository) {
   summary.prepend(term);
 }
 
-function installImportReset() {
-  const button = document.querySelector("#package-file-button");
-  const input = document.querySelector("#package-file");
+function clearPendingPackageState() {
+  try {
+    localStorage.removeItem(PENDING_PACKAGE_KEY);
+  } catch {
+    // Best-effort cleanup only.
+  }
+
   const review = document.querySelector("#package-review");
   const summary = document.querySelector("#package-summary");
-  const submit = document.querySelector("#package-submit-button");
   const status = document.querySelector("#status");
 
-  if (!button || !input) return;
+  if (review) {
+    review.hidden = true;
+  }
 
-  button.addEventListener(
-    "click",
-    () => {
-      try {
-        localStorage.removeItem(PENDING_PACKAGE_KEY);
-      } catch {
-        // Best-effort cleanup only.
-      }
+  if (summary) {
+    summary.replaceChildren();
+  }
 
+  if (status) {
+    status.textContent = "";
+    status.dataset.state = "";
+  }
+}
+
+function installMobilePackagePicker() {
+  const originalButton = document.querySelector("#package-file-button");
+  const input = document.querySelector("#package-file");
+
+  if (!originalButton || !input) {
+    return;
+  }
+
+  const label = document.createElement("label");
+
+  label.id = "package-file-mobile-label";
+  label.htmlFor = input.id;
+  label.textContent = originalButton.textContent || "Import build package";
+  label.setAttribute("role", "button");
+  label.setAttribute("tabindex", "0");
+
+  label.style.display = "grid";
+  label.style.placeItems = "center";
+  label.style.width = "100%";
+  label.style.minHeight = "48px";
+  label.style.marginTop = "16px";
+  label.style.padding = "12px 14px";
+  label.style.border = "1px solid #6fe7d2";
+  label.style.borderRadius = "14px";
+  label.style.background = "transparent";
+  label.style.color = "#6fe7d2";
+  label.style.font = "inherit";
+  label.style.fontWeight = "900";
+  label.style.cursor = "pointer";
+  label.style.textAlign = "center";
+
+  originalButton.replaceWith(label);
+
+  function preparePicker() {
+    clearPendingPackageState();
+
+    try {
       input.value = "";
+    } catch {
+      // Some mobile browsers may reject programmatic reset.
+    }
+  }
 
-      if (review) review.hidden = true;
-      if (summary) summary.replaceChildren();
-      if (submit) submit.disabled = true;
+  label.addEventListener("pointerdown", preparePicker, {
+    capture: true,
+  });
 
-      if (status) {
-        status.textContent = "Choose a new build package.";
-        status.dataset.state = "";
-      }
-    },
-    true,
-  );
+  label.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
 
-  input.addEventListener("change", () => {
-    if (!input.files?.[0]) return;
-
-    setTimeout(() => {
-      if (submit) submit.disabled = false;
-    }, 0);
+    event.preventDefault();
+    preparePicker();
+    input.click();
   });
 }
 
 function installPackageTargetVisibility() {
   const input = document.querySelector("#package-file");
-  if (!input) return;
+
+  if (!input) {
+    return;
+  }
 
   input.addEventListener("change", async () => {
     const file = input.files?.[0];
-    if (!file) return;
+
+    if (!file) {
+      return;
+    }
 
     try {
       const value = JSON.parse(await file.text());
@@ -156,7 +222,9 @@ function installPackageTargetVisibility() {
           ? DEFAULT_TARGET_REPOSITORY
           : value.repository;
 
-      if (!validRepository(repository)) return;
+      if (!validRepository(repository)) {
+        return;
+      }
 
       setTimeout(() => {
         const review = document.querySelector("#package-review");
@@ -172,7 +240,7 @@ function installPackageTargetVisibility() {
 }
 
 function installPilotHelpers() {
-  installImportReset();
+  installMobilePackagePicker();
   installPackageTargetVisibility();
 }
 
@@ -205,7 +273,9 @@ window.fetch = async function pilotDiagnosticFetch(input, init) {
     const body = await cloned.json();
     const diagnosticText = formatMergeDiagnostics(body.check_diagnostics);
 
-    if (!diagnosticText) return response;
+    if (!diagnosticText) {
+      return response;
+    }
 
     const enriched = {
       ...body,
@@ -238,7 +308,10 @@ document.addEventListener(
   "click",
   (event) => {
     const button = event.target.closest?.(".merge-button");
-    if (!button) return;
+
+    if (!button) {
+      return;
+    }
 
     if (mergeTapLocks.has(button)) {
       event.preventDefault();
@@ -247,7 +320,10 @@ document.addEventListener(
     }
 
     mergeTapLocks.add(button);
-    setTimeout(() => mergeTapLocks.delete(button), 1500);
+
+    setTimeout(() => {
+      mergeTapLocks.delete(button);
+    }, 1500);
   },
   true,
 );
