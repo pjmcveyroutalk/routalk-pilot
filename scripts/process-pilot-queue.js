@@ -60,6 +60,30 @@ function configureCommitter(cwd) {
   run(["git","config","user.name","Routalk Pilot Queue"],{cwd});
   run(["git","config","user.email","41898282+github-actions[bot]@users.noreply.github.com"],{cwd});
 }
+function verifyChangedPayloads(paths, cwd) {
+  for (const rel of paths) {
+    const absolute = `${cwd}/${rel}`;
+    const lower = rel.toLowerCase();
+
+    if (lower.endsWith(".json")) {
+      try {
+        JSON.parse(fs.readFileSync(absolute, "utf8"));
+      } catch (error) {
+        fail(`Payload verification failed for ${rel}: invalid JSON (${error.message})`);
+      }
+      continue;
+    }
+
+    if (lower.endsWith(".js") || lower.endsWith(".cjs") || lower.endsWith(".mjs")) {
+      const result = run([process.execPath, "--check", absolute], {cwd, allowFailure:true});
+      if (result.status !== 0) {
+        fail(`Payload verification failed for ${rel}: ${result.stderr || result.stdout || "JavaScript syntax error"}`);
+      }
+    }
+  }
+
+  console.log("[VERIFY] Changed payload syntax checks passed");
+}
 function verifyPreparedWorkspace(repository, cwd) {
   if (repository !== DEFAULT_REPOSITORY) return;
 
@@ -111,6 +135,7 @@ function processApply(command) {
     run(["git","add","--",...writtenPaths],{cwd});
     const diff = run(["git","diff","--cached","--quiet"],{cwd,allowFailure:true});
     if (diff.status === 0) return console.log(`[SKIP] ${command.command_id}: requested files match main`);
+    verifyChangedPayloads(writtenPaths, cwd);
     verifyPreparedWorkspace(repository, cwd);
     run(["git","commit","-m",command.commit_message || `Pilot queue: ${command.command_id}`],{cwd});
     createPullRequest(command, repository, cwd);
