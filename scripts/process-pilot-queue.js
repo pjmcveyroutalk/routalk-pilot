@@ -60,6 +60,33 @@ function configureCommitter(cwd) {
   run(["git","config","user.name","Routalk Pilot Queue"],{cwd});
   run(["git","config","user.email","41898282+github-actions[bot]@users.noreply.github.com"],{cwd});
 }
+function verifyPreparedWorkspace(repository, cwd) {
+  if (repository !== DEFAULT_REPOSITORY) return;
+
+  const verifier = `${cwd}/scripts/verify-release.js`;
+  const manifest = `${cwd}/pilot-verification/verification-manifest.v1.json`;
+  if (!fs.existsSync(verifier) || !fs.statSync(verifier).isFile())
+    fail("Deterministic verification is unavailable: scripts/verify-release.js is missing");
+  if (!fs.existsSync(manifest) || !fs.statSync(manifest).isFile())
+    fail("Deterministic verification is unavailable: verification manifest is missing");
+
+  const result = run([
+    process.execPath,
+    "scripts/verify-release.js",
+    "--manifest",
+    "pilot-verification/verification-manifest.v1.json",
+  ], {cwd, allowFailure:true});
+
+  if (result.status !== 0) {
+    fail(
+      `Deterministic verification failed before PR creation.\n` +
+      `stdout: ${result.stdout || ""}\n` +
+      `stderr: ${result.stderr || ""}`
+    );
+  }
+
+  console.log("[VERIFY] Canonical Routalk Pilot verification passed before PR creation");
+}
 function createPullRequest(command, repository, cwd) {
   run(["git","push","--set-upstream","origin",command.branch],{cwd});
   const body = `${command.pr_body || ""}\n\n---\nPilot queue command: \`${command.command_id}\`\nCreated from the encrypted Routalk Pilot queue.`.trim();
@@ -84,6 +111,7 @@ function processApply(command) {
     run(["git","add","--",...writtenPaths],{cwd});
     const diff = run(["git","diff","--cached","--quiet"],{cwd,allowFailure:true});
     if (diff.status === 0) return console.log(`[SKIP] ${command.command_id}: requested files match main`);
+    verifyPreparedWorkspace(repository, cwd);
     run(["git","commit","-m",command.commit_message || `Pilot queue: ${command.command_id}`],{cwd});
     createPullRequest(command, repository, cwd);
   } finally { if (cwd !== process.cwd()) fs.rmSync(cwd,{recursive:true,force:true}); }
@@ -106,6 +134,7 @@ function processDelete(command) {
     }
     configureCommitter(cwd);
     run(["git","rm","--",...command.deletions.map((item) => item.path)],{cwd});
+    verifyPreparedWorkspace(repository, cwd);
     run(["git","commit","-m",command.commit_message || `Pilot delete: ${command.command_id}`],{cwd});
     createPullRequest(command, repository, cwd);
   } finally { if (cwd !== process.cwd()) fs.rmSync(cwd,{recursive:true,force:true}); }
