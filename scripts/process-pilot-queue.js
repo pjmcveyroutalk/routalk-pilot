@@ -44,39 +44,78 @@ function prLedgerContains(commandId, repository) {
 function remoteBranchExists(branch, cwd) {
   return run(["git","ls-remote","--exit-code","--heads","origin",branch], {cwd,allowFailure:true}).status === 0;
 }
-function processApply(command) {
+function prepareCommandBranch(command) {
   const repository = resolveRepository(command);
-  if (prLedgerContains(command.command_id, repository)) return console.log(`[SKIP] ${command.command_id}: permanent PR ledger match`);
+  if (prLedgerContains(command.command_id, repository)) {
+    console.log(`[SKIP] ${command.command_id}: permanent PR ledger match`);
+    return null;
+  }
   const cwd = prepareWorkspace(repository);
+  if (remoteBranchExists(command.branch, cwd)) fail(`Refusing to overwrite existing branch ${command.branch}`);
+  run(["git","fetch","origin","main"], {cwd});
+  run(["git","checkout","-B",command.branch,"origin/main"], {cwd});
+  return { repository, cwd };
+}
+function configureCommitter(cwd) {
+  run(["git","config","user.name","Routalk Pilot Queue"],{cwd});
+  run(["git","config","user.email","41898282+github-actions[bot]@users.noreply.github.com"],{cwd});
+}
+function createPullRequest(command, repository, cwd) {
+  run(["git","push","--set-upstream","origin",command.branch],{cwd});
+  const body = `${command.pr_body || ""}\n\n---\nPilot queue command: \`${command.command_id}\`\nCreated from the encrypted Routalk Pilot queue.`.trim();
+  run(["gh","pr","create",...ghRepoArgs(repository),"--base","main","--head",command.branch,
+    "--title",command.pr_title || `Pilot change: ${command.command_id}`,"--body",body],{cwd});
+  console.log(`[OK] ${command.command_id}: pull request created in ${repository}`);
+}
+function processApply(command) {
+  const prepared = prepareCommandBranch(command);
+  if (!prepared) return;
+  const { repository, cwd } = prepared;
   try {
-    if (remoteBranchExists(command.branch, cwd)) fail(`Refusing to overwrite existing branch ${command.branch}`);
-    run(["git","fetch","origin","main"], {cwd});
-    run(["git","checkout","-B",command.branch,"origin/main"], {cwd});
     const writtenPaths = [];
     for (const file of command.files) {
       const path = file.path.replaceAll("\\","/");
       const absolute = `${cwd}/${path}`;
       fs.mkdirSync(absolute.slice(0, absolute.lastIndexOf("/")), {recursive:true});
-      fs.writeFileSync(absolute, Buffer.from(file.content_b64,"base64")); writtenPaths.push(path);
+      fs.writeFileSync(absolute, Buffer.from(file.content_b64,"base64"));
+      writtenPaths.push(path);
     }
-    run(["git","config","user.name","Routalk Pilot Queue"],{cwd});
-    run(["git","config","user.email","41898282+github-actions[bot]@users.noreply.github.com"],{cwd});
+    configureCommitter(cwd);
     run(["git","add","--",...writtenPaths],{cwd});
     const diff = run(["git","diff","--cached","--quiet"],{cwd,allowFailure:true});
     if (diff.status === 0) return console.log(`[SKIP] ${command.command_id}: requested files match main`);
     run(["git","commit","-m",command.commit_message || `Pilot queue: ${command.command_id}`],{cwd});
-    run(["git","push","--set-upstream","origin",command.branch],{cwd});
-    const body = `${command.pr_body || ""}\n\n---\nPilot queue command: \`${command.command_id}\`\nCreated from the encrypted Routalk Pilot queue.`.trim();
-    run(["gh","pr","create",...ghRepoArgs(repository),"--base","main","--head",command.branch,
-      "--title",command.pr_title || `Pilot change: ${command.command_id}`,"--body",body],{cwd});
-    console.log(`[OK] ${command.command_id}: pull request created in ${repository}`);
+    createPullRequest(command, repository, cwd);
+  } finally { if (cwd !== process.cwd()) fs.rmSync(cwd,{recursive:true,force:true}); }
+}
+function currentBlobSha(path, cwd) {
+  const result = run(["git","rev-parse",`HEAD:${path}`],{cwd,allowFailure:true});
+  if (result.status !== 0) fail(`Deletion target does not exist on main: ${path}`);
+  return String(result.stdout || "").trim().toLowerCase();
+}
+function processDelete(command) {
+  const prepared = prepareCommandBranch(command);
+  if (!prepared) return;
+  const { repository, cwd } = prepared;
+  try {
+    for (const item of command.deletions) {
+      const observed = currentBlobSha(item.path, cwd);
+      if (observed !== item.expected_blob_sha) {
+        fail(`Deletion target changed since approval: ${item.path}`);
+      }
+    }
+    configureCommitter(cwd);
+    run(["git","rm","--",...command.deletions.map((item) => item.path)],{cwd});
+    run(["git","commit","-m",command.commit_message || `Pilot delete: ${command.command_id}`],{cwd});
+    createPullRequest(command, repository, cwd);
   } finally { if (cwd !== process.cwd()) fs.rmSync(cwd,{recursive:true,force:true}); }
 }
 function main() {
   const queuePath = process.argv[2], secret = process.env.PILOT_QUEUE_SECRET;
   if (!queuePath || !secret) fail("Pilot queue path and secret are required");
   const command = validateCommand(decryptEnvelope(JSON.parse(fs.readFileSync(queuePath,"utf8")),secret));
-  processApply(command);
+  if (command.action === "delete") processDelete(command);
+  else processApply(command);
 }
 if (require.main === module) { try { main(); } catch(error) { console.error(`[ERROR] ${error.message || error}`); process.exitCode=1; } }
 module.exports = { decryptEnvelope, validateCommand };
