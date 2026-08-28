@@ -56,7 +56,16 @@ function prepareCommandBranch(command) {
     return null;
   }
   const cwd = prepareWorkspace(repository);
-  if (remoteBranchExists(command.branch, cwd)) fail(`Refusing to overwrite existing branch ${command.branch}`);
+  if (remoteBranchExists(command.branch, cwd)) {
+    if (!command.branch.startsWith("chatgpt/"))
+      fail(`Refusing to overwrite existing branch ${command.branch}`);
+
+    const cleanup = run(["git","push","origin","--delete",command.branch], {cwd,allowFailure:true});
+    if (cleanup.status !== 0 || remoteBranchExists(command.branch, cwd))
+      fail(`Could not recover orphaned Pilot branch ${command.branch}`);
+
+    console.log(`[RECOVERY] ${command.command_id}: removed orphaned Pilot branch ${command.branch}`);
+  }
   run(["git","fetch","origin","main"], {cwd});
   run(["git","checkout","-B",command.branch,"origin/main"], {cwd});
   return { repository, cwd };
