@@ -72,21 +72,11 @@ function processApply(command) {
     console.log(`[OK] ${command.command_id}: pull request created in ${repository}`);
   } finally { if (cwd !== process.cwd()) fs.rmSync(cwd,{recursive:true,force:true}); }
 }
-function processMerge(command) {
-  const repository = resolveRepository(command);
-  const view = run(["gh","pr","view",String(command.pr_number),...ghRepoArgs(repository),"--json","state,mergedAt,headRefName,baseRefName"]);
-  const pull = JSON.parse(view.stdout);
-  if (pull.mergedAt) return console.log(`[SKIP] ${command.command_id}: PR #${command.pr_number} already merged`);
-  if (pull.state !== "OPEN" || pull.baseRefName !== "main" || !String(pull.headRefName || "").startsWith("chatgpt/"))
-    fail("Pilot queue can only merge open chatgpt/* pull requests into main");
-  run(["gh","pr","merge",String(command.pr_number),...ghRepoArgs(repository),"--squash","--delete-branch"]);
-  console.log(`[OK] ${command.command_id}: merged ${repository} PR #${command.pr_number}`);
-}
 function main() {
   const queuePath = process.argv[2], secret = process.env.PILOT_QUEUE_SECRET;
   if (!queuePath || !secret) fail("Pilot queue path and secret are required");
   const command = validateCommand(decryptEnvelope(JSON.parse(fs.readFileSync(queuePath,"utf8")),secret));
-  if (command.action === "apply") processApply(command); else processMerge(command);
+  processApply(command);
 }
 if (require.main === module) { try { main(); } catch(error) { console.error(`[ERROR] ${error.message || error}`); process.exitCode=1; } }
 module.exports = { decryptEnvelope, validateCommand };

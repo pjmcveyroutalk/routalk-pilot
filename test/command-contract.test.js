@@ -22,10 +22,7 @@ function rejects(fn, pattern) {
 assert.equal(normalizeCommand(apply(), { allowedRepositories: allow }).repository, PILOT);
 assert.equal(normalizeCommand(apply({ repository: EXTERNAL }), { allowedRepositories: allow }).repository, EXTERNAL);
 rejects(() => normalizeCommand(apply({ repository: "other/repo" }), { allowedRepositories: allow }), /allowlisted/);
-assert.deepEqual(
-  normalizeCommand({ command_id: "MERGE-1", action: "merge", repository: PILOT, pr_number: 7 }, { allowedRepositories: allow }),
-  { version: 1, command_id: "MERGE-1", action: "merge", repository: PILOT, pr_number: 7 },
-);
+rejects(() => normalizeCommand({ command_id: "MERGE-1", action: "merge", repository: PILOT, pr_number: 7 }, { allowedRepositories: allow }), /action must be apply/);
 rejects(() => normalizeCommand(apply({ command_id: "bad id" }), { allowedRepositories: allow }), /command_id/);
 rejects(() => normalizeCommand(apply({ branch: "main" }), { allowedRepositories: allow }), /branch/);
 for (const path of [".git/config", ".github/workflows/test.yml", "../escape.txt", "/absolute.txt"]) {
