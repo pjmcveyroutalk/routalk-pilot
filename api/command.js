@@ -326,9 +326,17 @@ async function verifyControlProduction(request, triggerSecret, expectedRevision)
   }
 }
 
+function isTerminalQueueFailure(queueRecord) {
+  return (
+    queueRecord?.state === "closed" &&
+    queueRecord?.state_reason === "not_planned"
+  );
+}
+
 function deriveState(queueRecord, pullRequest, deployment, verification) {
   if (!queueRecord) return null;
   if (queueRecord.state === "open") return COMMAND_STATES.QUEUED;
+  if (isTerminalQueueFailure(queueRecord)) return COMMAND_STATES.FAILED;
   if (!pullRequest) return COMMAND_STATES.RUNNING;
 
   if (pullRequest.merged_at) {
@@ -474,6 +482,8 @@ module.exports = async function handler(request, response) {
       adapter: controlStore.name,
       record: queueRecord.number,
       processed: queueRecord.state === "closed",
+      terminal: isTerminalQueueFailure(queueRecord),
+      state_reason: queueRecord.state_reason || null,
       created_at: queueRecord.created_at,
       updated_at: queueRecord.updated_at,
     },
@@ -499,6 +509,7 @@ module.exports = async function handler(request, response) {
 module.exports._test = {
   allowedTargetRepositories,
   deriveState,
+  isTerminalQueueFailure,
   observeDeployment,
   parseExternalVerifiers,
   validCommandId,
