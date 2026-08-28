@@ -165,7 +165,6 @@ module.exports = async function handler(request, response) {
     accepted: true,
     command_id: command.command_id,
     repository: command.repository,
-    resume_url: `/resume.html?command_id=${encodeURIComponent(command.command_id)}`,
     queue_record: commandRecord.storage_record,
     state: commandRecord.state,
     command_record: commandRecord,
