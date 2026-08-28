@@ -126,7 +126,6 @@ function clearPendingPackageState() {
 
   const review = document.querySelector("#package-review");
   const summary = document.querySelector("#package-summary");
-  const status = document.querySelector("#status");
 
   if (review) {
     review.hidden = true;
@@ -135,69 +134,42 @@ function clearPendingPackageState() {
   if (summary) {
     summary.replaceChildren();
   }
-
-  if (status) {
-    status.textContent = "";
-    status.dataset.state = "";
-  }
 }
 
 function installMobilePackagePicker() {
-  const originalButton = document.querySelector("#package-file-button");
+  const button = document.querySelector("#package-file-button");
   const input = document.querySelector("#package-file");
 
-  if (!originalButton || !input) {
+  if (!button || !input) {
     return;
   }
 
-  const label = document.createElement("label");
+  button.addEventListener(
+    "click",
+    (event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
 
-  label.id = "package-file-mobile-label";
-  label.htmlFor = input.id;
-  label.textContent = originalButton.textContent || "Import build package";
-  label.setAttribute("role", "button");
-  label.setAttribute("tabindex", "0");
+      clearPendingPackageState();
 
-  label.style.display = "grid";
-  label.style.placeItems = "center";
-  label.style.width = "100%";
-  label.style.minHeight = "48px";
-  label.style.marginTop = "16px";
-  label.style.padding = "12px 14px";
-  label.style.border = "1px solid #6fe7d2";
-  label.style.borderRadius = "14px";
-  label.style.background = "transparent";
-  label.style.color = "#6fe7d2";
-  label.style.font = "inherit";
-  label.style.fontWeight = "900";
-  label.style.cursor = "pointer";
-  label.style.textAlign = "center";
+      try {
+        input.value = "";
+      } catch {
+        // Ignore reset failures.
+      }
 
-  originalButton.replaceWith(label);
-
-  function preparePicker() {
-    clearPendingPackageState();
-
-    try {
-      input.value = "";
-    } catch {
-      // Some mobile browsers may reject programmatic reset.
-    }
-  }
-
-  label.addEventListener("pointerdown", preparePicker, {
-    capture: true,
-  });
-
-  label.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" && event.key !== " ") {
-      return;
-    }
-
-    event.preventDefault();
-    preparePicker();
-    input.click();
-  });
+      try {
+        if (typeof input.showPicker === "function") {
+          input.showPicker();
+        } else {
+          input.click();
+        }
+      } catch {
+        input.click();
+      }
+    },
+    true,
+  );
 }
 
 function installPackageTargetVisibility() {
@@ -234,7 +206,7 @@ function installPackageTargetVisibility() {
         }
       }, 0);
     } catch {
-      // Main package validation owns error handling.
+      // Pilot's main package validator owns the visible error.
     }
   });
 }
