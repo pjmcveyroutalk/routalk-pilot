@@ -272,7 +272,7 @@ catch {
 function setPackageBusy(busy) { packageFile.disabled = busy; packageSubmitButton.disabled = busy; }
 function addResultLink(label, url) { if (!url)
     return; const link = document.createElement("a"); link.className = "result-link"; link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = label; results.append(link); }
-function addMergeButton(pull, secretSession) {
+function addMergeButton(pull, secretSession, commandId) {
     const button = document.createElement("button");
     button.className = "merge-button";
     button.type = "button";
@@ -310,6 +310,7 @@ function addMergeButton(pull, secretSession) {
             }
             button.textContent = `PR #${pull.number} merged`;
             showStatus(`PR #${pull.number} merged successfully. Verifying completion…`, "success");
+            await monitorCommand(commandId, secretSession, 2);
         }
         catch (error) {
             merging = false;
@@ -339,16 +340,16 @@ async function monitorCommand(commandId, secretSession, visibilityAttempts = 4) 
         if (pull) {
             addResultLink(`${pull.merged ? "Merged" : "Open"} PR #${pull.number}: ${pull.title}`, pull.html_url);
             if (!pull.merged)
-                addMergeButton(pull, secretSession);
+                addMergeButton(pull, secretSession, commandId);
         }
         if (result.state === "COMPLETED") {
             showStatus("Pilot command completed and production verification passed.", "success");
             return;
         }
         if (result.state === "MERGED") {
-            const verification = result.production_verification?.state;
-            showStatus(verification === "TARGET_VERIFICATION_PENDING" ? "PR merged. External production verification is not connected yet." : "PR merged. Waiting for production verification…", "success");
-            return;
+            showStatus("PR merged. Waiting for production verification…", "success");
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            continue;
         }
         if (result.state === "AWAITING_APPROVAL") {
             showStatus(`Pilot finished the build. PR #${pull?.number || ""} is ready for approval.`, "success");
