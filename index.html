@@ -448,6 +448,15 @@ async function monitorCommand(commandId, secretSession, visibilityAttempts = 4) 
       showStatus(`Pilot finished the build. PR #${pull?.number || ""} is ready for approval.`, "success");
       return;
     }
+    if (result.state === "FAILED") {
+      showStatus(
+        result.storage?.terminal
+          ? "Pilot stopped this command because the package failed a terminal pre-PR check. Correct the package and submit a new command."
+          : "Pilot command failed. Review the PR or build state before submitting a replacement.",
+        "error"
+      );
+      return;
+    }
     if (result.state === "RUNNING" || result.state === "DISPATCHING")
       showStatus("Pilot is processing the encrypted package…");
     else
