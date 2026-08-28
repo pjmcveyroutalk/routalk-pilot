@@ -8,6 +8,11 @@ const {
 } = require("../lib/command-contract");
 
 function fail(message) { throw new Error(message); }
+function terminalFail(message) {
+  const error = new Error(message);
+  error.pilotTerminal = true;
+  throw error;
+}
 function decryptEnvelope(envelope, secret) {
   if (!envelope || envelope.version !== 1 || envelope.algorithm !== "A256GCM" ||
       typeof envelope.iv !== "string" || typeof envelope.tag !== "string" ||
@@ -69,7 +74,7 @@ function verifyChangedPayloads(paths, cwd) {
       try {
         JSON.parse(fs.readFileSync(absolute, "utf8"));
       } catch (error) {
-        fail(`Payload verification failed for ${rel}: invalid JSON (${error.message})`);
+        terminalFail(`Payload verification failed for ${rel}: invalid JSON (${error.message})`);
       }
       continue;
     }
@@ -77,7 +82,7 @@ function verifyChangedPayloads(paths, cwd) {
     if (lower.endsWith(".js") || lower.endsWith(".cjs") || lower.endsWith(".mjs")) {
       const result = run([process.execPath, "--check", absolute], {cwd, allowFailure:true});
       if (result.status !== 0) {
-        fail(`Payload verification failed for ${rel}: ${result.stderr || result.stdout || "JavaScript syntax error"}`);
+        terminalFail(`Payload verification failed for ${rel}: ${result.stderr || result.stdout || "JavaScript syntax error"}`);
       }
     }
   }
@@ -90,9 +95,9 @@ function verifyPreparedWorkspace(repository, cwd) {
   const verifier = `${cwd}/scripts/verify-release.js`;
   const manifest = `${cwd}/pilot-verification/verification-manifest.v1.json`;
   if (!fs.existsSync(verifier) || !fs.statSync(verifier).isFile())
-    fail("Deterministic verification is unavailable: scripts/verify-release.js is missing");
+    terminalFail("Deterministic verification is unavailable: scripts/verify-release.js is missing");
   if (!fs.existsSync(manifest) || !fs.statSync(manifest).isFile())
-    fail("Deterministic verification is unavailable: verification manifest is missing");
+    terminalFail("Deterministic verification is unavailable: verification manifest is missing");
 
   const result = run([
     process.execPath,
@@ -102,7 +107,7 @@ function verifyPreparedWorkspace(repository, cwd) {
   ], {cwd, allowFailure:true});
 
   if (result.status !== 0) {
-    fail(
+    terminalFail(
       `Deterministic verification failed before PR creation.\n` +
       `stdout: ${result.stdout || ""}\n` +
       `stderr: ${result.stderr || ""}`
@@ -157,6 +162,51 @@ function processApply(command) {
     createPullRequest(command, repository, cwd);
   } finally { if (cwd !== process.cwd()) fs.rmSync(cwd,{recursive:true,force:true}); }
 }
+function findOpenQueueRecord(commandId) {
+  const result = run([
+    "gh","issue","list",
+    "--repo",DEFAULT_REPOSITORY,
+    "--state","open",
+    "--limit","1000",
+    "--json","number,title"
+  ], {allowFailure:true});
+  if (result.status !== 0) return null;
+
+  let issues;
+  try { issues = JSON.parse(result.stdout || "[]"); }
+  catch { return null; }
+
+  const expected = `Pilot queue command ${commandId}`;
+  return issues.find((issue) => issue.title === expected) || null;
+}
+
+function markTerminalFailure(commandId, message) {
+  const record = findOpenQueueRecord(commandId);
+  if (!record?.number) {
+    console.error(`[FAILURE] ${commandId}: terminal failure could not locate its queue record`);
+    return false;
+  }
+
+  const summary = String(message || "Pilot command failed deterministic verification")
+    .replace(/\s+/g, " ")
+    .slice(0, 600);
+
+  const result = run([
+    "gh","issue","close",String(record.number),
+    "--repo",DEFAULT_REPOSITORY,
+    "--reason","not planned",
+    "--comment",`Pilot stopped retrying this command because the same package cannot succeed unchanged. ${summary}`
+  ], {allowFailure:true});
+
+  if (result.status !== 0) {
+    console.error(`[FAILURE] ${commandId}: could not persist terminal queue state`);
+    return false;
+  }
+
+  console.log(`[FAILURE] ${commandId}: terminal queue state persisted; scheduled retries stopped`);
+  return true;
+}
+
 function currentBlobSha(path, cwd) {
   const result = run(["git","rev-parse",`HEAD:${path}`],{cwd,allowFailure:true});
   if (result.status !== 0) fail(`Deletion target does not exist on main: ${path}`);
@@ -170,7 +220,7 @@ function processDelete(command) {
     for (const item of command.deletions) {
       const observed = currentBlobSha(item.path, cwd);
       if (observed !== item.expected_blob_sha) {
-        fail(`Deletion target changed since approval: ${item.path}`);
+        terminalFail(`Deletion target changed since approval: ${item.path}`);
       }
     }
     configureCommitter(cwd);
@@ -184,8 +234,13 @@ function main() {
   const queuePath = process.argv[2], secret = process.env.PILOT_QUEUE_SECRET;
   if (!queuePath || !secret) fail("Pilot queue path and secret are required");
   const command = validateCommand(decryptEnvelope(JSON.parse(fs.readFileSync(queuePath,"utf8")),secret));
-  if (command.action === "delete") processDelete(command);
-  else processApply(command);
+  try {
+    if (command.action === "delete") processDelete(command);
+    else processApply(command);
+  } catch (error) {
+    if (error?.pilotTerminal) markTerminalFailure(command.command_id, error.message);
+    throw error;
+  }
 }
 if (require.main === module) { try { main(); } catch(error) { console.error(`[ERROR] ${error.message || error}`); process.exitCode=1; } }
 module.exports = { decryptEnvelope, validateCommand };
