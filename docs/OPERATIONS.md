@@ -2,7 +2,7 @@
 
 ## Normal phone workflow
 1. Open Pilot.
-2. Choose/import one reviewed `.pilot` package.
+2. Choose/import one reviewed `.json` or `.pilot` package; on Android prefer `.json` when file handoff is unreliable.
 3. Review repository, command, branch, files, payload, and paths.
 4. Submit once.
 5. Follow the exact returned command ID.
@@ -12,11 +12,13 @@
 
 ## Operational rules
 - Do not retry a submission merely because command visibility is briefly delayed.
+- Do not retry merge solely because the UI reports an error after an already-confirmed merge; resume the command and reconcile authoritative state first.
 - Do not create a replacement PR for an ambiguous existing command; reconcile the existing command first.
 - Do not equate merge success with production completion.
+- Do not use legacy `api/dispatch`, `api/status`, `resume.html`, or `pilot-recovery.js` as active workflow paths.
 - Do not weaken path, repository, authorization, immutable revision, CI, conflict, encryption, or production-verification guards to make progress.
 - Do not place secrets in packages, repository documentation, logs, or user-visible instructions.
 - Server-side command state is authoritative; mobile local state is convenience only.
 
 ## Recovery
-Before destructive cleanup or future deletion support, freeze a known-good commit, record the active architecture/state, inventory every affected path, and confirm a straightforward rollback. See `docs/RECOVERY_CHECKPOINT.md`.
+Before destructive cleanup or future deletion support, freeze a known-good commit, record the active architecture/state, inventory every affected path, and confirm a straightforward rollback. See `docs/RECOVERY_CHECKPOINT.md` and `docs/RETIREMENT_INVENTORY.md`.
