@@ -1,19 +1,18 @@
 {
   "schema_version": 1,
-  "name": "routalk-pilot-core-v1",
-  "description": "Provider-independent verification of the core Routalk Pilot mobile command, recovery, queue, merge, and production-verification surfaces.",
+  "name": "routalk-pilot-core-v2",
+  "description": "Provider-independent verification of the current canonical Routalk Pilot phone UI, queue, command observation, protected merge, command contracts/state, persistent store, processor, and exact production-verification surfaces.",
   "artifact_files": [
     "index.html",
-    "resume.html",
-    "pilot-recovery.js",
-    "api/command.js",
-    "api/dispatch.js",
-    "api/merge.js",
     "api/queue.js",
-    "api/resume-last.js",
-    "api/status.js",
+    "api/command.js",
+    "api/merge.js",
     "api/verify-production.js",
-    "scripts/process-pilot-queue.js"
+    "lib/command-contract.js",
+    "lib/command-state.js",
+    "lib/stores/github-issue-command-store.js",
+    "scripts/process-pilot-queue.js",
+    ".github/workflows/routalk-pilot-private-queue.yml"
   ],
   "checks": [
     {
@@ -22,37 +21,66 @@
       "path": "index.html"
     },
     {
-      "id": "resume-exists",
+      "id": "queue-exists",
       "type": "file_exists",
-      "path": "resume.html"
+      "path": "api/queue.js"
     },
     {
-      "id": "recovery-exists",
+      "id": "command-exists",
       "type": "file_exists",
-      "path": "pilot-recovery.js"
+      "path": "api/command.js"
     },
     {
-      "id": "pending-package-marker",
+      "id": "merge-exists",
+      "type": "file_exists",
+      "path": "api/merge.js"
+    },
+    {
+      "id": "production-verifier-exists",
+      "type": "file_exists",
+      "path": "api/verify-production.js"
+    },
+    {
+      "id": "command-contract-exists",
+      "type": "file_exists",
+      "path": "lib/command-contract.js"
+    },
+    {
+      "id": "command-state-exists",
+      "type": "file_exists",
+      "path": "lib/command-state.js"
+    },
+    {
+      "id": "command-store-exists",
+      "type": "file_exists",
+      "path": "lib/stores/github-issue-command-store.js"
+    },
+    {
+      "id": "processor-exists",
+      "type": "file_exists",
+      "path": "scripts/process-pilot-queue.js"
+    },
+    {
+      "id": "private-queue-workflow-exists",
+      "type": "file_exists",
+      "path": ".github/workflows/routalk-pilot-private-queue.yml"
+    },
+    {
+      "id": "pending-package-v3-marker",
       "type": "contains",
       "path": "index.html",
-      "text": "routalk-pilot.pending-package.v2"
+      "text": "routalk-pilot.pending-package.v3"
     },
     {
-      "id": "recovery-navigation-marker",
+      "id": "resume-last-command-marker",
       "type": "contains",
       "path": "index.html",
-      "text": "Test recovery navigation"
+      "text": "Resume last command"
     },
     {
-      "id": "resume-back-marker",
-      "type": "contains",
-      "path": "resume.html",
-      "text": "Back to Pilot"
-    },
-    {
-      "id": "dispatch-syntax",
+      "id": "queue-syntax",
       "type": "node_syntax",
-      "path": "api/dispatch.js"
+      "path": "api/queue.js"
     },
     {
       "id": "command-syntax",
@@ -65,34 +93,29 @@
       "path": "api/merge.js"
     },
     {
-      "id": "queue-syntax",
-      "type": "node_syntax",
-      "path": "api/queue.js"
-    },
-    {
-      "id": "resume-api-syntax",
-      "type": "node_syntax",
-      "path": "api/resume-last.js"
-    },
-    {
-      "id": "status-syntax",
-      "type": "node_syntax",
-      "path": "api/status.js"
-    },
-    {
       "id": "production-verify-syntax",
       "type": "node_syntax",
       "path": "api/verify-production.js"
     },
     {
+      "id": "command-contract-syntax",
+      "type": "node_syntax",
+      "path": "lib/command-contract.js"
+    },
+    {
+      "id": "command-state-syntax",
+      "type": "node_syntax",
+      "path": "lib/command-state.js"
+    },
+    {
+      "id": "command-store-syntax",
+      "type": "node_syntax",
+      "path": "lib/stores/github-issue-command-store.js"
+    },
+    {
       "id": "queue-runner-syntax",
       "type": "node_syntax",
       "path": "scripts/process-pilot-queue.js"
-    },
-    {
-      "id": "recovery-script-syntax",
-      "type": "node_syntax",
-      "path": "pilot-recovery.js"
     }
   ]
 }
