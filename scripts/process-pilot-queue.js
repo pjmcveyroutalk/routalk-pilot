@@ -114,8 +114,24 @@ function verifyPreparedWorkspace(repository, cwd) {
 function createPullRequest(command, repository, cwd) {
   run(["git","push","--set-upstream","origin",command.branch],{cwd});
   const body = `${command.pr_body || ""}\n\n---\nPilot queue command: \`${command.command_id}\`\nCreated from the encrypted Routalk Pilot queue.`.trim();
-  run(["gh","pr","create",...ghRepoArgs(repository),"--base","main","--head",command.branch,
-    "--title",command.pr_title || `Pilot change: ${command.command_id}`,"--body",body],{cwd});
+  const created = run(["gh","pr","create",...ghRepoArgs(repository),"--base","main","--head",command.branch,
+    "--title",command.pr_title || `Pilot change: ${command.command_id}`,"--body",body],{cwd,allowFailure:true});
+
+  if (created.status !== 0) {
+    if (prLedgerContains(command.command_id, repository)) {
+      console.log(`[OK] ${command.command_id}: pull request creation reconciled after ambiguous GitHub response`);
+      return;
+    }
+
+    const cleanup = run(["git","push","origin","--delete",command.branch],{cwd,allowFailure:true});
+    if (cleanup.status === 0)
+      console.log(`[RECOVERY] ${command.command_id}: removed orphaned branch after PR creation failure`);
+    else
+      console.error(`[RECOVERY] ${command.command_id}: could not remove orphaned branch ${command.branch}`);
+
+    fail(`Pull request creation failed after branch push.\nstdout: ${created.stdout || ""}\nstderr: ${created.stderr || ""}`);
+  }
+
   console.log(`[OK] ${command.command_id}: pull request created in ${repository}`);
 }
 function processApply(command) {
