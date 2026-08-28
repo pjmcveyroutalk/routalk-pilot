@@ -4,6 +4,7 @@ const {
   createCommandStoreAdapter,
   transitionCommandRecord,
 } = require("../lib/command-state");
+const { normalizeCommand } = require("../lib/command-contract");
 const {
   createGithubIssueCommandStore,
 } = require("../lib/stores/github-issue-command-store");
@@ -11,10 +12,6 @@ const {
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10_000;
 const MAX_BODY_BYTES = 100_000;
-const MAX_FILES = 20;
-const MAX_FILE_BYTES = 32_000;
-const MAX_TOTAL_FILE_BYTES = 32_000;
-const DEFAULT_TARGET_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
 
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(left || "");
@@ -22,7 +19,6 @@ function safeEqual(left, right) {
   if (leftBuffer.length !== rightBuffer.length) return false;
   return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
-
 function setSecurityHeaders(response, requestId) {
   response.setHeader("Cache-Control", "no-store, max-age=0");
   response.setHeader("Pragma", "no-cache");
@@ -31,162 +27,20 @@ function setSecurityHeaders(response, requestId) {
   response.setHeader("X-Frame-Options", "DENY");
   response.setHeader("X-Pilot-Request-Id", requestId);
 }
-
 function send(response, status, requestId, body) {
   return response.status(status).json({ ...body, request_id: requestId });
 }
-
 function validRepositoryPart(value) {
   return /^[A-Za-z0-9_.-]{1,100}$/.test(value || "");
 }
-
-function validRepository(value) {
-  if (typeof value !== "string") return false;
-  const parts = value.split("/");
-  return (
-    parts.length === 2 &&
-    validRepositoryPart(parts[0]) &&
-    validRepositoryPart(parts[1])
-  );
-}
-
-function allowedTargetRepositories() {
-  const configured =
-    process.env.PILOT_TARGET_REPOSITORIES || DEFAULT_TARGET_REPOSITORY;
-  return new Set(
-    configured
-      .split(",")
-      .map((value) => value.trim())
-      .filter((value) => validRepository(value)),
-  );
-}
-
-function normalizeTargetRepository(value) {
-  const repository =
-    value == null || value === "" ? DEFAULT_TARGET_REPOSITORY : value;
-  if (!validRepository(repository)) throw new Error("repository is invalid");
-  if (!allowedTargetRepositories().has(repository)) {
-    throw new Error("repository is not allowlisted");
-  }
-  return repository;
-}
-
 function validWorkflow(value) {
   return /^[A-Za-z0-9_.-]{1,100}\.ya?ml$/.test(value || "");
 }
-
-function validCommandId(value) {
-  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value || "");
-}
-
-function validBranch(value) {
-  return (
-    /^chatgpt\/[A-Za-z0-9._/-]{1,120}$/.test(value || "") &&
-    !value.includes("..") &&
-    !value.includes("//") &&
-    !value.endsWith("/")
-  );
-}
-
-function validTarget(value) {
-  if (typeof value !== "string" || value.length < 1 || value.length > 240) return false;
-  const normalized = value.replaceAll("\\", "/");
-  const parts = normalized.split("/");
-  const lowered = normalized.toLowerCase();
-  return (
-    !normalized.startsWith("/") &&
-    !parts.includes("") &&
-    !parts.includes(".") &&
-    !parts.includes("..") &&
-    !lowered.startsWith(".git/") &&
-    lowered !== ".git" &&
-    !lowered.startsWith(".github/workflows/")
-  );
-}
-
 function readBody(request) {
   if (!request.body) return {};
   if (typeof request.body === "object") return request.body;
   try { return JSON.parse(request.body); } catch { return {}; }
 }
-
-function validateText(value, field, maxLength, required = false) {
-  if (value == null || value === "") {
-    if (required) throw new Error(`${field} is required`);
-    return "";
-  }
-  if (typeof value !== "string" || value.length > maxLength) {
-    throw new Error(`${field} is invalid`);
-  }
-  return value;
-}
-
-function normalizeCommand(body) {
-  const commandId = validateText(body.command_id, "command_id", 80, true);
-  if (!validCommandId(commandId)) throw new Error("command_id is invalid");
-
-  const action = validateText(body.action, "action", 16, true).toLowerCase();
-  if (!new Set(["apply", "merge"]).has(action)) {
-    throw new Error("action must be apply or merge");
-  }
-
-  const repository = normalizeTargetRepository(
-    validateText(body.repository, "repository", 201),
-  );
-
-  if (action === "merge") {
-    const prNumber = Number(body.pr_number);
-    if (!Number.isSafeInteger(prNumber) || prNumber < 1) {
-      throw new Error("pr_number is invalid");
-    }
-    return { version: 1, command_id: commandId, action, repository, pr_number: prNumber };
-  }
-
-  const branch = validateText(body.branch, "branch", 128, true);
-  if (!validBranch(branch)) throw new Error("branch is invalid");
-
-  if (!Array.isArray(body.files) || body.files.length < 1 || body.files.length > MAX_FILES) {
-    throw new Error(`files must contain 1 to ${MAX_FILES} entries`);
-  }
-
-  const seenTargets = new Set();
-  let totalBytes = 0;
-  const files = body.files.map((file, index) => {
-    if (!file || typeof file !== "object") throw new Error(`files[${index}] is invalid`);
-    const path = validateText(file.path, `files[${index}].path`, 240, true).replaceAll("\\", "/");
-    if (!validTarget(path)) throw new Error(`files[${index}].path is unsafe`);
-    if (seenTargets.has(path)) throw new Error(`duplicate target path: ${path}`);
-    seenTargets.add(path);
-
-    const contentBase64 = validateText(
-      file.content_b64,
-      `files[${index}].content_b64`,
-      Math.ceil((MAX_FILE_BYTES * 4) / 3) + 8,
-      true,
-    );
-    const decoded = Buffer.from(contentBase64, "base64");
-    if (decoded.length > MAX_FILE_BYTES || decoded.toString("base64") !== contentBase64) {
-      throw new Error(`files[${index}].content_b64 is invalid or too large`);
-    }
-    totalBytes += decoded.length;
-    return { path, content_b64: contentBase64 };
-  });
-
-  if (totalBytes > MAX_TOTAL_FILE_BYTES) throw new Error("combined file payload is too large");
-
-  return {
-    version: 1,
-    command_id: commandId,
-    action,
-    repository,
-    branch,
-    files,
-    commit_message: validateText(body.commit_message, "commit_message", 200),
-    pr_title: validateText(body.pr_title, "pr_title", 200),
-    pr_body: validateText(body.pr_body, "pr_body", 8_000),
-  };
-}
-
 function encryptCommand(command, secret) {
   const key = crypto.createHash("sha256").update(secret).digest();
   const iv = crypto.randomBytes(12);
@@ -201,7 +55,6 @@ function encryptCommand(command, secret) {
     ciphertext: ciphertext.toString("base64"),
   };
 }
-
 function githubHeaders(token) {
   return {
     Accept: "application/vnd.github+json",
@@ -211,7 +64,6 @@ function githubHeaders(token) {
     "X-GitHub-Api-Version": "2022-11-28",
   };
 }
-
 async function github(url, token, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), GITHUB_TIMEOUT_MS);
@@ -229,51 +81,40 @@ async function github(url, token, options = {}) {
     clearTimeout(timeout);
   }
 }
-
 module.exports = async function handler(request, response) {
   const requestId = crypto.randomUUID();
   setSecurityHeaders(response, requestId);
-
   if (request.method !== "POST") {
     response.setHeader("Allow", "POST");
     return send(response, 405, requestId, { error: "Method not allowed" });
   }
-
   const contentLength = Number(request.headers["content-length"] || 0);
   if (!Number.isFinite(contentLength) || contentLength > MAX_BODY_BYTES) {
     return send(response, 413, requestId, { error: "Request body is too large" });
   }
-
   const triggerSecret = process.env.PILOT_TRIGGER_SECRET;
   const queueSecret = process.env.PILOT_QUEUE_SECRET;
   const githubToken = process.env.PILOT_GITHUB_TOKEN;
   if (!triggerSecret || !queueSecret || !githubToken) {
     return send(response, 503, requestId, { error: "Pilot queue is not configured" });
   }
-
   const authorization = request.headers.authorization || "";
   const suppliedSecret = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   if (!safeEqual(suppliedSecret, triggerSecret)) {
     return send(response, 401, requestId, { error: "Unauthorized" });
   }
-
   let command;
   try { command = normalizeCommand(readBody(request)); }
   catch (error) {
     return send(response, 400, requestId, { error: error.message || "Invalid command" });
   }
-
   const owner = process.env.PILOT_GITHUB_OWNER || "pjmcveyroutalk";
   const repository = process.env.PILOT_GITHUB_REPO || "routalk-pilot";
-  const workflow =
-    process.env.PILOT_GITHUB_WORKFLOW ||
-    "routalk-pilot-private-queue.yml";
+  const workflow = process.env.PILOT_GITHUB_WORKFLOW || "routalk-pilot-private-queue.yml";
   const mainRef = process.env.PILOT_GITHUB_REF || "main";
-
   if (!validRepositoryPart(owner) || !validRepositoryPart(repository) || !validWorkflow(workflow)) {
     return send(response, 503, requestId, { error: "Pilot queue configuration is invalid" });
   }
-
   const baseUrl = `${GITHUB_API}/repos/${owner}/${repository}`;
   const envelope = encryptCommand(command, queueSecret);
   const githubStore = createGithubIssueCommandStore({
@@ -282,7 +123,6 @@ module.exports = async function handler(request, response) {
     githubRequest: github,
   });
   const store = createCommandStoreAdapter(githubStore);
-
   let commandRecord;
   try {
     commandRecord = await store.enqueue(command, envelope);
@@ -298,7 +138,6 @@ module.exports = async function handler(request, response) {
       error: error.message || "Pilot command could not be queued",
     });
   }
-
   const dispatched = await github(
     `${baseUrl}/actions/workflows/${workflow}/dispatches`,
     githubToken,
@@ -310,7 +149,6 @@ module.exports = async function handler(request, response) {
       }),
     },
   );
-
   if (dispatched.ok) {
     commandRecord = transitionCommandRecord(
       commandRecord,
@@ -323,7 +161,6 @@ module.exports = async function handler(request, response) {
       status: dispatched.status,
     });
   }
-
   return send(response, 202, requestId, {
     accepted: true,
     command_id: command.command_id,
@@ -336,14 +173,4 @@ module.exports = async function handler(request, response) {
     recovery: dispatched.ok ? undefined : "The scheduled recovery cycle will process this command",
   });
 };
-
-module.exports._test = {
-  allowedTargetRepositories,
-  encryptCommand,
-  normalizeCommand,
-  normalizeTargetRepository,
-  validBranch,
-  validCommandId,
-  validRepository,
-  validTarget,
-};
+module.exports._test = { encryptCommand, normalizeCommand };
