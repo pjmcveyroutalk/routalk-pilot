@@ -320,11 +320,18 @@ function addMergeButton(pull, secretSession) {
     });
     results.append(button);
 }
-async function monitorCommand(commandId, secretSession) {
+async function monitorCommand(commandId, secretSession, visibilityAttempts = 4) {
     const deadline = Date.now() + 120000;
+    let visibilityMisses = 0;
     while (Date.now() < deadline) {
         const response = await fetch(`/api/command?command_id=${encodeURIComponent(commandId)}`, { headers: { Authorization: `Bearer ${secretSession.value}` }, cache: "no-store" });
         const result = await response.json().catch(() => ({}));
+        if (response.status === 404 && visibilityMisses < visibilityAttempts) {
+            visibilityMisses += 1;
+            showStatus("Package accepted. Waiting for command visibility…");
+            await new Promise(resolve => setTimeout(resolve, 750));
+            continue;
+        }
         if (!response.ok)
             throw new Error(result.error || `Command lookup failed (${response.status})`);
         results.replaceChildren();
@@ -425,7 +432,7 @@ resumeLastButton.addEventListener("click", async () => { const commandId = readL
     showStatus("Enter the Pilot trigger secret to resume the command.", "error");
     return;
 } const secretSession = { value: secret, expiresAt: Date.now() + 10 * 60 * 1000 }; secretInput.value = ""; results.replaceChildren(); showStatus(`Resuming ${commandId}…`); try {
-    await monitorCommand(commandId, secretSession);
+    await monitorCommand(commandId, secretSession, 2);
 }
 catch (error) {
     showStatus(error.message || "The command could not be resumed.", "error");
