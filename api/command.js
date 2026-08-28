@@ -103,18 +103,27 @@ async function observeDeployment(baseUrl, token, revision) {
   }
 
   const statuses = Array.isArray(result.data.statuses) ? result.data.statuses : [];
-  const successful = statuses.find((status) => status.state === "success");
-  const pending = statuses.find(
+  const deploymentStatuses = statuses.filter((status) => {
+    if (!status || typeof status.context !== "string" || !status.context.trim()) return false;
+    if (typeof status.target_url !== "string" || !status.target_url.trim()) return false;
+    try {
+      return new URL(status.target_url).protocol === "https:";
+    } catch {
+      return false;
+    }
+  });
+  const successful = deploymentStatuses.find((status) => status.state === "success");
+  const pending = deploymentStatuses.find(
     (status) => status.state === "pending" || status.state === "expected",
   );
-  const failed = statuses.find(
+  const failed = deploymentStatuses.find(
     (status) => status.state === "failure" || status.state === "error",
   );
-  const observed = failed || pending || successful || statuses[0] || null;
+  const observed = failed || pending || successful || deploymentStatuses[0] || null;
 
   return {
     checked: true,
-    state: observed?.state || result.data.state || "pending",
+    state: observed?.state || "UNKNOWN",
     ready: Boolean(successful) && !failed && !pending,
     context: observed?.context || null,
     target_url: observed?.target_url || null,
@@ -331,7 +340,7 @@ function deriveState(queueRecord, pullRequest, deployment, verification) {
   }
 
   if (pullRequest.state === "open") return COMMAND_STATES.AWAITING_APPROVAL;
-  return COMMAND_STATES.COMPLETED;
+  return COMMAND_STATES.FAILED;
 }
 
 function createStore(repository, githubToken) {
