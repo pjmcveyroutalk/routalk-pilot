@@ -2,13 +2,10 @@ const LAST_COMMAND_KEY = "pilot:last-command-id";
 const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v2";
 const DEFAULT_TARGET_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
 
-// Pending build packages are intentionally not restored across page loads.
-// A stale package can otherwise trap mobile users on an already-submitted
-// command and prevent a newly selected package from replacing it.
 try {
   localStorage.removeItem(PENDING_PACKAGE_KEY);
 } catch {
-  // Storage cleanup is best-effort only.
+  // Best-effort cleanup only.
 }
 
 function rememberCommandId(commandId) {
@@ -92,11 +89,55 @@ function showPackageRepository(repository) {
 
   const term = document.createElement("dt");
   term.textContent = "Repository";
+
   const detail = document.createElement("dd");
   detail.textContent = repository;
   detail.style.fontWeight = "900";
+
   summary.prepend(detail);
   summary.prepend(term);
+}
+
+function installImportReset() {
+  const button = document.querySelector("#package-file-button");
+  const input = document.querySelector("#package-file");
+  const review = document.querySelector("#package-review");
+  const summary = document.querySelector("#package-summary");
+  const submit = document.querySelector("#package-submit-button");
+  const status = document.querySelector("#status");
+
+  if (!button || !input) return;
+
+  button.addEventListener(
+    "click",
+    () => {
+      try {
+        localStorage.removeItem(PENDING_PACKAGE_KEY);
+      } catch {
+        // Best-effort cleanup only.
+      }
+
+      input.value = "";
+
+      if (review) review.hidden = true;
+      if (summary) summary.replaceChildren();
+      if (submit) submit.disabled = true;
+
+      if (status) {
+        status.textContent = "Choose a new build package.";
+        status.dataset.state = "";
+      }
+    },
+    true,
+  );
+
+  input.addEventListener("change", () => {
+    if (!input.files?.[0]) return;
+
+    setTimeout(() => {
+      if (submit) submit.disabled = false;
+    }, 0);
+  });
 }
 
 function installPackageTargetVisibility() {
@@ -109,6 +150,7 @@ function installPackageTargetVisibility() {
 
     try {
       const value = JSON.parse(await file.text());
+
       const repository =
         value.repository == null || value.repository === ""
           ? DEFAULT_TARGET_REPOSITORY
@@ -118,6 +160,7 @@ function installPackageTargetVisibility() {
 
       setTimeout(() => {
         const review = document.querySelector("#package-review");
+
         if (review && !review.hidden) {
           showPackageRepository(repository);
         }
@@ -128,12 +171,17 @@ function installPackageTargetVisibility() {
   });
 }
 
+function installPilotHelpers() {
+  installImportReset();
+  installPackageTargetVisibility();
+}
+
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", installPackageTargetVisibility, {
+  document.addEventListener("DOMContentLoaded", installPilotHelpers, {
     once: true,
   });
 } else {
-  installPackageTargetVisibility();
+  installPilotHelpers();
 }
 
 const originalFetch = window.fetch.bind(window);
@@ -161,7 +209,9 @@ window.fetch = async function pilotDiagnosticFetch(input, init) {
 
     const enriched = {
       ...body,
-      error: `${body.error || "Pull request checks blocked the merge"}\n${diagnosticText}`,
+      error: `${
+        body.error || "Pull request checks blocked the merge"
+      }\n${diagnosticText}`,
     };
 
     return new Response(JSON.stringify(enriched), {
