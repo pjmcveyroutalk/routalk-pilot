@@ -9,6 +9,7 @@ const MERGE_ATTEMPTS = 4;
 const MERGE_RETRY_MS = 1000;
 const CHECK_SETTLE_ATTEMPTS = 7;
 const CHECK_SETTLE_RETRY_MS = 1000;
+const DEFAULT_TARGET_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
 
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(left || "");
@@ -45,6 +46,27 @@ function validRepositoryPart(value) {
     value.length > 0 &&
     value.length <= 100 &&
     /^[A-Za-z0-9_.-]+$/.test(value)
+  );
+}
+
+function validRepository(value) {
+  if (typeof value !== "string") return false;
+  const parts = value.split("/");
+  return (
+    parts.length === 2 &&
+    validRepositoryPart(parts[0]) &&
+    validRepositoryPart(parts[1])
+  );
+}
+
+function allowedTargetRepositories() {
+  const configured =
+    process.env.PILOT_TARGET_REPOSITORIES || DEFAULT_TARGET_REPOSITORY;
+  return new Set(
+    configured
+      .split(",")
+      .map((value) => value.trim())
+      .filter(validRepository),
   );
 }
 
@@ -142,20 +164,35 @@ module.exports = async function handler(request, response) {
     return send(response, 401, requestId, { error: "Unauthorized" });
   }
 
-  const prNumber = Number(readBody(request).pr_number);
+  const body = readBody(request);
+  const prNumber = Number(body.pr_number);
   if (!Number.isSafeInteger(prNumber) || prNumber < 1) {
     return send(response, 400, requestId, { error: "Invalid pull request number" });
   }
 
-  const owner = process.env.PILOT_GITHUB_OWNER || "pjmcveyroutalk";
-  const repository = process.env.PILOT_GITHUB_REPO || "routalk-pilot";
-  if (!validRepositoryPart(owner) || !validRepositoryPart(repository)) {
+  const controlOwner = process.env.PILOT_GITHUB_OWNER || "pjmcveyroutalk";
+  const controlRepo = process.env.PILOT_GITHUB_REPO || "routalk-pilot";
+  if (!validRepositoryPart(controlOwner) || !validRepositoryPart(controlRepo)) {
     return send(response, 503, requestId, {
       error: "Merge repository configuration is invalid",
     });
   }
 
-  const fullName = `${owner}/${repository}`;
+  const requestedRepository =
+    typeof body.repository === "string" && body.repository.trim()
+      ? body.repository.trim()
+      : `${controlOwner}/${controlRepo}`;
+
+  if (
+    !validRepository(requestedRepository) ||
+    !allowedTargetRepositories().has(requestedRepository)
+  ) {
+    return send(response, 403, requestId, {
+      error: "Repository is not allowlisted for Pilot merge",
+    });
+  }
+
+  const fullName = requestedRepository;
   const baseUrl = `${GITHUB_API}/repos/${fullName}`;
   let pull = await refreshUntilMergeabilityKnown(baseUrl, prNumber, githubToken);
 
@@ -383,6 +420,7 @@ module.exports = async function handler(request, response) {
       if (refreshed.data.merged) {
         return send(response, 200, requestId, {
           merged: true,
+          repository: fullName,
           number: prNumber,
           sha: refreshed.data.merge_commit_sha || null,
           html_url: refreshed.data.html_url,
@@ -408,6 +446,7 @@ module.exports = async function handler(request, response) {
     if (reconciled.ok && reconciled.data.merged) {
       return send(response, 200, requestId, {
         merged: true,
+        repository: fullName,
         number: prNumber,
         sha: reconciled.data.merge_commit_sha || null,
         html_url: reconciled.data.html_url || initial.html_url,
@@ -424,6 +463,7 @@ module.exports = async function handler(request, response) {
 
     console.warn("Pilot merge declined", {
       request_id: requestId,
+      repository: fullName,
       status: merge?.status,
       github_message: githubMessage,
       reconciliation_status: reconciled?.status,
@@ -454,16 +494,24 @@ module.exports = async function handler(request, response) {
   if (!branchDeleted) {
     console.warn("Pilot merged but branch cleanup failed", {
       request_id: requestId,
+      repository: fullName,
       status: deleted.status,
     });
   }
 
   return send(response, 200, requestId, {
     merged: true,
+    repository: fullName,
     number: prNumber,
     sha: merge.data.sha,
     html_url: initial.html_url,
     branch_deleted: branchDeleted,
     warning: branchDeleted ? undefined : "Pull request merged; branch cleanup failed",
   });
+};
+
+module.exports._test = {
+  allowedTargetRepositories,
+  validRepository,
+  validRepositoryPart,
 };
