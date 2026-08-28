@@ -1,3 +1,0 @@
-Routalk Pilot bridge baseline verified.
-
-This harmless file confirms the isolated command queue can create a branch and pull request in the Routalk Pilot repository.
