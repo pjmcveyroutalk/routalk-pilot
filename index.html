@@ -217,8 +217,8 @@ function validateRepository(value) { return typeof value === "string" && /^[A-Za
 function validatePackage(value) {
     if (!value || typeof value !== "object" || Array.isArray(value))
         throw new Error("The selected file is not a Pilot package.");
-    if (value.version !== 1 || value.action !== "apply")
-        throw new Error("Only version 1 apply packages are supported.");
+    if (value.version !== 1 || !["apply", "delete"].includes(value.action))
+        throw new Error("Only version 1 apply or delete packages are supported.");
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value.command_id || ""))
         throw new Error("The package command ID is invalid.");
     if (!/^chatgpt\/[A-Za-z0-9._/-]{1,120}$/.test(value.branch || "") || value.branch.includes("..") || value.branch.includes("//") || value.branch.endsWith("/"))
@@ -226,26 +226,40 @@ function validatePackage(value) {
     const repository = value.repository || CONTROL_REPOSITORY;
     if (!validateRepository(repository))
         throw new Error("The package repository is invalid.");
-    if (!Array.isArray(value.files) || value.files.length < 1 || value.files.length > 20)
-        throw new Error("A package must contain 1 to 20 files.");
     const paths = new Set();
     let totalBytes = 0;
-    for (const file of value.files) {
-        const path = typeof file?.path === "string" ? file.path.replaceAll("\\", "/") : "";
-        const lowered = path.toLowerCase();
-        if (!path || path.startsWith("/") || path.split("/").some(part => !part || part === "." || part === "..") || lowered === ".git" || lowered.startsWith(".git/") || lowered.startsWith(".github/workflows/") || paths.has(path))
-            throw new Error(`Unsafe or duplicate package path: ${path || "(missing)"}`);
-        paths.add(path);
-        const fileBytes = decodedBase64Size(file.content_b64);
-        if (fileBytes > 32000)
-            throw new Error(`Package file is too large: ${path}`);
-        totalBytes += fileBytes;
+    if (value.action === "apply") {
+        if (!Array.isArray(value.files) || value.files.length < 1 || value.files.length > 20)
+            throw new Error("An apply package must contain 1 to 20 files.");
+        for (const file of value.files) {
+            const path = typeof file?.path === "string" ? file.path.replaceAll("\\", "/") : "";
+            const lowered = path.toLowerCase();
+            if (!path || path.startsWith("/") || path.split("/").some(part => !part || part === "." || part === "..") || lowered === ".git" || lowered.startsWith(".git/") || lowered.startsWith(".github/workflows/") || paths.has(path))
+                throw new Error(`Unsafe or duplicate package path: ${path || "(missing)"}`);
+            paths.add(path);
+            const fileBytes = decodedBase64Size(file.content_b64);
+            if (fileBytes > 32000)
+                throw new Error(`Package file is too large: ${path}`);
+            totalBytes += fileBytes;
+        }
+        if (totalBytes > 32000)
+            throw new Error("The combined package is too large.");
+    } else {
+        if (!Array.isArray(value.deletions) || value.deletions.length < 1 || value.deletions.length > 10)
+            throw new Error("A delete package must contain 1 to 10 deletion targets.");
+        for (const item of value.deletions) {
+            const path = typeof item?.path === "string" ? item.path.replaceAll("\\", "/") : "";
+            const lowered = path.toLowerCase();
+            if (!path || path.startsWith("/") || path.split("/").some(part => !part || part === "." || part === "..") || lowered === ".git" || lowered.startsWith(".git/") || lowered.startsWith(".github/") || paths.has(path))
+                throw new Error(`Protected, unsafe, or duplicate deletion path: ${path || "(missing)"}`);
+            if (!/^[0-9a-f]{40}$/i.test(item.expected_blob_sha || ""))
+                throw new Error(`Deletion target is missing a valid expected blob SHA: ${path || "(missing)"}`);
+            paths.add(path);
+        }
     }
-    if (totalBytes > 32000)
-        throw new Error("The combined package is too large.");
     return { command: { ...value, repository }, repository, totalBytes, paths: [...paths] };
 }
-function renderPackageReview(info) { packageSummary.replaceChildren(); const rows = [["Repository", info.repository], ["Command", info.command.command_id], ["Branch", info.command.branch], ["PR title", info.command.pr_title || "(not supplied)"], ["Files", String(info.paths.length)], ["Payload", `${info.totalBytes.toLocaleString()} bytes`], ["Paths", info.paths.join(", ")]]; for (const [label, value] of rows) {
+function renderPackageReview(info) { packageSummary.replaceChildren(); const isDelete = info.command.action === "delete"; const rows = [["Action", info.command.action], ["Repository", info.repository], ["Command", info.command.command_id], ["Branch", info.command.branch], ["PR title", info.command.pr_title || "(not supplied)"], [isDelete ? "Deletions" : "Files", String(info.paths.length)], ["Payload", isDelete ? "SHA-locked deletion" : `${info.totalBytes.toLocaleString()} bytes`], ["Paths", info.paths.join(", ")]]; for (const [label, value] of rows) {
     const term = document.createElement("dt");
     term.textContent = label;
     const detail = document.createElement("dd");
@@ -381,7 +395,7 @@ packageFile.addEventListener("change", async () => {
         approvedPackage = info.command;
         savePendingPackage(approvedPackage);
         renderPackageReview(info);
-        showStatus("Package loaded. Review the scope below before submitting.", "success");
+        showStatus(info.command.action === "delete" ? "Deletion package loaded. Review every path before submitting." : "Package loaded. Review the scope below before submitting.", "success");
     }
     catch (error) {
         packageFile.value = "";
@@ -401,7 +415,7 @@ packageSubmitButton.addEventListener("click", async () => {
     setPackageBusy(true);
     packageSubmitButton.textContent = "Encrypting and submitting…";
     results.replaceChildren();
-    showStatus("Submitting the approved package through the encrypted queue…");
+    showStatus(approvedPackage.action === "delete" ? "Submitting the approved deletion package through the encrypted queue…" : "Submitting the approved package through the encrypted queue…");
     try {
         const response = await fetch("/api/queue", { method: "POST", headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" }, body: JSON.stringify(approvedPackage) });
         const result = await response.json().catch(() => ({}));
