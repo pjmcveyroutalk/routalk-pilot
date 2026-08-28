@@ -13,7 +13,9 @@
         color: #f4f7fb;
       }
 
-      * { box-sizing: border-box; }
+      * {
+        box-sizing: border-box;
+      }
 
       body {
         margin: 0;
@@ -44,7 +46,10 @@
         text-transform: uppercase;
       }
 
-      h1 { margin: 0; font-size: clamp(2rem, 9vw, 3rem); }
+      h1 {
+        margin: 0;
+        font-size: clamp(2rem, 9vw, 3rem);
+      }
 
       .description {
         margin: 12px 0 24px;
@@ -75,7 +80,8 @@
         border-color: #6fe7d2;
       }
 
-      button {
+      button,
+      .file-button {
         width: 100%;
         min-height: 54px;
         margin-top: 16px;
@@ -88,13 +94,33 @@
         cursor: pointer;
       }
 
-      button:disabled { cursor: wait; opacity: 0.65; }
+      button:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
 
-      .secondary-button {
+      .secondary-button,
+      .file-button {
         min-height: 48px;
         border: 1px solid #6fe7d2;
         background: transparent;
         color: #6fe7d2;
+      }
+
+      .file-button {
+        display: grid;
+        place-items: center;
+        margin-bottom: 0;
+        padding: 12px 14px;
+        text-align: center;
+      }
+
+      #package-file {
+        position: absolute;
+        opacity: 0;
+        width: 1px;
+        height: 1px;
+        pointer-events: none;
       }
 
       #status {
@@ -103,47 +129,25 @@
         color: #b8c7db;
         font-size: 0.92rem;
         line-height: 1.45;
+        white-space: pre-line;
       }
 
-      #status[data-state="success"] { color: #7cf2bd; }
-      #status[data-state="error"] { color: #ff9a9a; }
+      #status[data-state="success"] {
+        color: #7cf2bd;
+      }
 
-      #results:empty { display: none; }
+      #status[data-state="error"] {
+        color: #ff9a9a;
+      }
+
+      #results:empty {
+        display: none;
+      }
 
       #results {
         display: grid;
         gap: 10px;
         margin-top: 14px;
-      }
-
-      .result-summary {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-      }
-
-      .summary-card {
-        padding: 12px;
-        border: 1px solid #294467;
-        border-radius: 12px;
-        background: #07101d;
-      }
-
-      .summary-label {
-        display: block;
-        color: #8296b0;
-        font-size: 0.72rem;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .summary-value {
-        display: block;
-        margin-top: 4px;
-        color: #f4f7fb;
-        font-size: 1rem;
-        font-weight: 900;
       }
 
       .result-link {
@@ -157,9 +161,6 @@
         text-decoration: none;
       }
 
-      .result-link:focus,
-      .result-link:hover { border-color: #6fe7d2; }
-
       .merge-button {
         margin-top: 0;
         min-height: 48px;
@@ -168,30 +169,19 @@
         color: #6fe7d2;
       }
 
-      .privacy {
-        margin: 20px 0 0;
+      .privacy,
+      .helper {
         color: #8296b0;
         font-size: 0.78rem;
         line-height: 1.45;
       }
 
-      .sr-only {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        margin: -1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
-        white-space: nowrap;
-        border: 0;
+      .privacy {
+        margin: 20px 0 0;
       }
 
       .helper {
         margin: 8px 0 0;
-        color: #8296b0;
-        font-size: 0.78rem;
-        line-height: 1.4;
       }
 
       .package-review {
@@ -202,7 +192,9 @@
         background: #07101d;
       }
 
-      .package-review[hidden] { display: none; }
+      .package-review[hidden] {
+        display: none;
+      }
 
       .package-review h2 {
         margin: 0 0 10px;
@@ -217,31 +209,30 @@
         font-size: 0.8rem;
       }
 
-      .package-review dt { color: #8296b0; }
-      .package-review dd { margin: 0; overflow-wrap: anywhere; }
+      .package-review dt {
+        color: #8296b0;
+      }
+
+      .package-review dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
     </style>
   </head>
+
   <body>
     <main>
       <p class="eyebrow">Mobile development bridge</p>
       <h1>Routalk Pilot</h1>
+
       <p class="description">
-        Start the command bridge immediately instead of waiting for a scheduled cycle.
+        Send a build package through the encrypted Pilot queue and follow the
+        exact command through approval.
       </p>
 
-      <form id="dispatch-form" action="/api/dispatch" method="post">
-        <label class="sr-only" for="username">Pilot profile</label>
-        <input
-          class="sr-only"
-          id="username"
-          name="username"
-          type="text"
-          value="pilot-operator"
-          autocomplete="username"
-          readonly
-          tabindex="-1"
-        />
+      <form id="dispatch-form">
         <label for="secret">Pilot trigger secret</label>
+
         <input
           id="secret"
           name="secret"
@@ -249,139 +240,140 @@
           autocomplete="current-password"
           required
         />
+
         <p class="helper">
           Use the saved Pilot trigger password, not a GitHub token.
         </p>
-        <button id="run-button" type="submit">Run now</button>
-        <button id="queue-test-button" class="secondary-button" type="button">
-          Verify private queue
+
+        <button id="run-button" type="submit">
+          Run now
         </button>
-        <p class="helper">
-          Creates one harmless encrypted verification PR through the private queue.
-        </p>
+
         <input
-          class="sr-only"
           id="package-file"
           type="file"
           accept="application/json,.json,.pilot"
         />
-        <button id="package-file-button" class="secondary-button" type="button">
+
+        <label class="file-button" for="package-file">
           Import build package
-        </button>
+        </label>
+
         <p class="helper">
-          Select a complete .json or .pilot package, review its scope, then submit it securely.
+          Choose a complete .json or .pilot package, review its scope, then
+          submit it securely.
         </p>
-        <button id="resume-last-button" class="secondary-button" type="button" hidden>
+
+        <button
+          id="resume-last-button"
+          class="secondary-button"
+          type="button"
+          hidden
+        >
           Resume last command
         </button>
-        <section id="package-review" class="package-review" aria-live="polite" hidden>
+
+        <section
+          id="package-review"
+          class="package-review"
+          aria-live="polite"
+          hidden
+        >
           <h2>Package review</h2>
+
           <dl id="package-summary"></dl>
-          <button id="package-submit-button" type="button">Submit approved package</button>
-          <button id="package-recovery-test-button" class="secondary-button" type="button">
-            Test recovery navigation
+
+          <button id="package-submit-button" type="button">
+            Submit approved package
           </button>
         </section>
       </form>
 
       <p id="status" role="status" aria-live="polite"></p>
+
       <div id="results" aria-label="Pilot results"></div>
+
       <p class="privacy">
-        The secret is used only for this request and is not saved by this page.
+        The secret is used only for the active request and is not saved by this
+        page.
       </p>
     </main>
 
-    <script src="/pilot-recovery.js"></script>
     <script>
+      const CONTROL_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
+      const LAST_COMMAND_KEY = "pilot:last-command-id";
+      const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v3";
+      const PENDING_MAX_AGE_MS = 30 * 60 * 1000;
+
       const form = document.querySelector("#dispatch-form");
       const secretInput = document.querySelector("#secret");
       const runButton = document.querySelector("#run-button");
-      const queueTestButton = document.querySelector("#queue-test-button");
       const packageFile = document.querySelector("#package-file");
-      const packageFileButton = document.querySelector("#package-file-button");
       const packageReview = document.querySelector("#package-review");
       const packageSummary = document.querySelector("#package-summary");
-      const packageSubmitButton = document.querySelector("#package-submit-button");
-      const packageRecoveryTestButton = document.querySelector("#package-recovery-test-button");
+      const packageSubmitButton = document.querySelector(
+        "#package-submit-button",
+      );
       const resumeLastButton = document.querySelector("#resume-last-button");
       const status = document.querySelector("#status");
       const results = document.querySelector("#results");
-      const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v2";
+
       let approvedPackage = null;
-
-      function rememberPendingPackage(command) {
-        try {
-          localStorage.setItem(PENDING_PACKAGE_KEY, JSON.stringify({
-            saved_at: Date.now(),
-            command,
-          }));
-        } catch {
-          // Package persistence is convenience-only. Submission remains available
-          // in the current page even if browser session storage is unavailable.
-        }
-      }
-
-      function clearPendingPackage() {
-        try {
-          localStorage.removeItem(PENDING_PACKAGE_KEY);
-        } catch {
-          // Ignore storage cleanup failures.
-        }
-      }
-
-      function restorePendingPackage() {
-        let stored = "";
-        try {
-          stored = localStorage.getItem(PENDING_PACKAGE_KEY) || "";
-        } catch {
-          return;
-        }
-        if (!stored) return;
-
-        try {
-          const saved = JSON.parse(stored);
-          if (
-            !saved ||
-            typeof saved !== "object" ||
-            typeof saved.saved_at !== "number" ||
-            Date.now() - saved.saved_at > 30 * 60 * 1000
-          ) {
-            clearPendingPackage();
-            return;
-          }
-          const packageInfo = validatePackage(saved.command);
-          approvedPackage = packageInfo.command;
-          showPackageReview(packageInfo);
-          showStatus("Recovered the package you were reviewing. Confirm it before submitting.");
-        } catch {
-          clearPendingPackage();
-        }
-      }
-
-      const lastCommandId = window.PilotRecovery?.readLastCommandId?.();
-      if (lastCommandId) {
-        resumeLastButton.hidden = false;
-        resumeLastButton.textContent = `Resume last command: ${lastCommandId}`;
-      }
-
-      resumeLastButton.addEventListener("click", () => {
-        location.href = window.PilotRecovery?.resumeUrl?.() || "/resume.html";
-      });
-
-      packageRecoveryTestButton.addEventListener("click", () => {
-        if (!approvedPackage) {
-          showStatus("Import and review a Pilot package first.", "error");
-          return;
-        }
-        location.href = window.PilotRecovery?.resumeUrl?.() || "/resume.html";
-      });
-
-      const wait = (milliseconds) =>
-        new Promise((resolve) => setTimeout(resolve, milliseconds));
 
       function showStatus(message, state = "") {
         status.textContent = message;
         status.dataset.state = state;
+      }
+
+      function safeStorageGet(key) {
+        try {
+          return localStorage.getItem(key);
+        } catch {
+          return null;
+        }
+      }
+
+      function safeStorageSet(key, value) {
+        try {
+          localStorage.setItem(key, value);
+        } catch {}
+      }
+
+      function safeStorageRemove(key) {
+        try {
+          localStorage.removeItem(key);
+        } catch {}
+      }
+
+      function rememberCommand(commandId) {
+        if (
+          /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(
+            commandId || "",
+          )
+        ) {
+          safeStorageSet(LAST_COMMAND_KEY, commandId);
+          refreshResumeButton();
+        }
+      }
+
+      function readLastCommand() {
+        const value =
+          safeStorageGet(LAST_COMMAND_KEY) || "";
+
+        return /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value)
+          ? value
+          : "";
+      }
+
+      function refreshResumeButton() {
+        const commandId = readLastCommand();
+
+        resumeLastButton.hidden = !commandId;
+
+        if (commandId) {
+          resumeLastButton.textContent =
+            `Resume last command: ${commandId}`;
+        }
       }
 
       function decodedBase64Size(value) {
@@ -390,473 +382,927 @@
           value.length % 4 !== 0 ||
           !/^[A-Za-z0-9+/]*={0,2}$/.test(value)
         ) {
-          throw new Error("A package file contains invalid encoded content.");
+          throw new Error(
+            "A package file contains invalid encoded content.",
+          );
         }
-        const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+
+        const padding = value.endsWith("==")
+          ? 2
+          : value.endsWith("=")
+            ? 1
+            : 0;
+
         return Math.floor((value.length * 3) / 4) - padding;
       }
 
+      function validateRepository(value) {
+        return (
+          typeof value === "string" &&
+          /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(
+            value,
+          )
+        );
+      }
+
       function validatePackage(value) {
-        if (!value || typeof value !== "object" || Array.isArray(value)) {
-          throw new Error("The selected file is not a Pilot package.");
-        }
-        if (value.version !== 1 || value.action !== "apply") {
-          throw new Error("Only version 1 apply packages are supported.");
-        }
-        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value.command_id || "")) {
-          throw new Error("The package command ID is invalid.");
-        }
         if (
-          !/^chatgpt\/[A-Za-z0-9._/-]{1,120}$/.test(value.branch || "") ||
+          !value ||
+          typeof value !== "object" ||
+          Array.isArray(value)
+        ) {
+          throw new Error(
+            "The selected file is not a Pilot package.",
+          );
+        }
+
+        if (
+          value.version !== 1 ||
+          value.action !== "apply"
+        ) {
+          throw new Error(
+            "Only version 1 apply packages are supported.",
+          );
+        }
+
+        if (
+          !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(
+            value.command_id || "",
+          )
+        ) {
+          throw new Error(
+            "The package command ID is invalid.",
+          );
+        }
+
+        if (
+          !/^chatgpt\/[A-Za-z0-9._/-]{1,120}$/.test(
+            value.branch || "",
+          ) ||
           value.branch.includes("..") ||
           value.branch.includes("//") ||
           value.branch.endsWith("/")
         ) {
-          throw new Error("The package branch is invalid.");
+          throw new Error(
+            "The package branch is invalid.",
+          );
         }
-        if (!Array.isArray(value.files) || value.files.length < 1 || value.files.length > 20) {
-          throw new Error("A package must contain 1 to 20 files.");
+
+        const repository =
+          value.repository || CONTROL_REPOSITORY;
+
+        if (!validateRepository(repository)) {
+          throw new Error(
+            "The package repository is invalid.",
+          );
+        }
+
+        if (
+          !Array.isArray(value.files) ||
+          value.files.length < 1 ||
+          value.files.length > 20
+        ) {
+          throw new Error(
+            "A package must contain 1 to 20 files.",
+          );
         }
 
         const paths = new Set();
+
         let totalBytes = 0;
+
         for (const file of value.files) {
-          const path = typeof file?.path === "string" ? file.path.replaceAll("\\", "/") : "";
+          const path =
+            typeof file?.path === "string"
+              ? file.path.replaceAll("\\", "/")
+              : "";
+
           const lowered = path.toLowerCase();
+
           if (
             !path ||
             path.startsWith("/") ||
-            path.split("/").some((part) => !part || part === "." || part === "..") ||
+            path
+              .split("/")
+              .some(
+                (part) =>
+                  !part ||
+                  part === "." ||
+                  part === "..",
+              ) ||
             lowered === ".git" ||
             lowered.startsWith(".git/") ||
             lowered.startsWith(".github/workflows/") ||
             paths.has(path)
           ) {
-            throw new Error(`Unsafe or duplicate package path: ${path || "(missing)"}`);
+            throw new Error(
+              `Unsafe or duplicate package path: ${
+                path || "(missing)"
+              }`,
+            );
           }
+
           paths.add(path);
-          const fileBytes = decodedBase64Size(file.content_b64);
-          if (fileBytes > 32_000) throw new Error(`Package file is too large: ${path}`);
+
+          const fileBytes =
+            decodedBase64Size(file.content_b64);
+
+          if (fileBytes > 32000) {
+            throw new Error(
+              `Package file is too large: ${path}`,
+            );
+          }
+
           totalBytes += fileBytes;
         }
-        if (totalBytes > 32_000) throw new Error("The combined package is too large.");
 
-        return { command: value, totalBytes, paths: [...paths] };
+        if (totalBytes > 32000) {
+          throw new Error(
+            "The combined package is too large.",
+          );
+        }
+
+        return {
+          command: {
+            ...value,
+            repository,
+          },
+          repository,
+          totalBytes,
+          paths: [...paths],
+        };
       }
 
-      function showPackageReview(packageInfo) {
+      function renderPackageReview(packageInfo) {
         packageSummary.replaceChildren();
+
         const rows = [
-          ["Command", packageInfo.command.command_id],
-          ["Branch", packageInfo.command.branch],
-          ["PR title", packageInfo.command.pr_title || "(not supplied)"],
-          ["Files", String(packageInfo.paths.length)],
-          ["Payload", `${packageInfo.totalBytes.toLocaleString()} bytes`],
-          ["Paths", packageInfo.paths.join(", ")],
+          [
+            "Repository",
+            packageInfo.repository,
+          ],
+          [
+            "Command",
+            packageInfo.command.command_id,
+          ],
+          [
+            "Branch",
+            packageInfo.command.branch,
+          ],
+          [
+            "PR title",
+            packageInfo.command.pr_title ||
+              "(not supplied)",
+          ],
+          [
+            "Files",
+            String(packageInfo.paths.length),
+          ],
+          [
+            "Payload",
+            `${packageInfo.totalBytes.toLocaleString()} bytes`,
+          ],
+          [
+            "Paths",
+            packageInfo.paths.join(", "),
+          ],
         ];
+
         for (const [label, value] of rows) {
-          const term = document.createElement("dt");
+          const term =
+            document.createElement("dt");
+
           term.textContent = label;
-          const detail = document.createElement("dd");
+
+          const detail =
+            document.createElement("dd");
+
           detail.textContent = value;
-          packageSummary.append(term, detail);
+
+          packageSummary.append(
+            term,
+            detail,
+          );
         }
+
         packageReview.hidden = false;
       }
 
-      restorePendingPackage();
-
-      function setBusy(busy) {
-        runButton.disabled = busy;
-        queueTestButton.disabled = busy;
-        packageFileButton.disabled = busy;
-        packageSubmitButton.disabled = busy;
-        packageRecoveryTestButton.disabled = busy;
+      function savePendingPackage(command) {
+        safeStorageSet(
+          PENDING_PACKAGE_KEY,
+          JSON.stringify({
+            saved_at: Date.now(),
+            command,
+          }),
+        );
       }
 
-      function addResultLink(label, url) {
-        if (!url) return;
-
-        const link = document.createElement("a");
-        link.className = "result-link";
-        link.href = url;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.textContent = label;
-        results.append(link);
+      function clearPendingPackage() {
+        safeStorageRemove(
+          PENDING_PACKAGE_KEY,
+        );
       }
 
-      function addMergeButton(pull, secretSession) {
-        const button = document.createElement("button");
-        button.className = "merge-button";
-        button.type = "button";
-        button.textContent = `Merge PR #${pull.number}`;
+      function restorePendingPackage() {
+        const stored =
+          safeStorageGet(
+            PENDING_PACKAGE_KEY,
+          );
 
-        button.addEventListener("click", async () => {
-          if (!secretSession.value || Date.now() > secretSession.expiresAt) {
-            secretSession.value = "";
-            showStatus("Merge session expired. Run Pilot again to continue.", "error");
-            button.disabled = true;
+        if (!stored) {
+          return;
+        }
+
+        try {
+          const saved =
+            JSON.parse(stored);
+
+          if (
+            !saved ||
+            typeof saved.saved_at !==
+              "number" ||
+            Date.now() - saved.saved_at >
+              PENDING_MAX_AGE_MS
+          ) {
+            clearPendingPackage();
             return;
           }
 
-          const confirmed = window.confirm(
-            `Merge PR #${pull.number} into main and delete its branch?`,
+          const packageInfo =
+            validatePackage(
+              saved.command,
+            );
+
+          approvedPackage =
+            packageInfo.command;
+
+          renderPackageReview(
+            packageInfo,
           );
 
-          if (!confirmed) return;
+          showStatus(
+            "Recovered your pending package. Review it before submitting.",
+          );
+        } catch {
+          clearPendingPackage();
+        }
+      }
 
-          button.disabled = true;
-          button.textContent = "Merging…";
-          showStatus(`Validating and merging PR #${pull.number}…`);
+      function setPackageBusy(busy) {
+        packageFile.disabled = busy;
+        packageSubmitButton.disabled = busy;
+        runButton.disabled = busy;
+      }
 
-          try {
-            const response = await fetch("/api/merge", {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${secretSession.value}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ pr_number: pull.number }),
-            });
-            const result = await response.json().catch(() => ({}));
+      function addResultLink(
+        label,
+        url,
+      ) {
+        if (!url) {
+          return;
+        }
 
-            if (!response.ok) {
-              throw new Error(result.error || `Merge failed (${response.status})`);
+        const link =
+          document.createElement("a");
+
+        link.className =
+          "result-link";
+
+        link.href = url;
+        link.target = "_blank";
+        link.rel =
+          "noopener noreferrer";
+        link.textContent = label;
+
+        results.append(link);
+      }
+
+      function addMergeButton(
+        pull,
+        secretSession,
+      ) {
+        const button =
+          document.createElement(
+            "button",
+          );
+
+        button.className =
+          "merge-button";
+
+        button.type = "button";
+
+        button.textContent =
+          `Merge PR #${pull.number}`;
+
+        let merging = false;
+
+        button.addEventListener(
+          "click",
+          async () => {
+            if (merging) {
+              return;
             }
 
-            button.textContent = `PR #${pull.number} merged`;
+            if (
+              !secretSession.value ||
+              Date.now() >
+                secretSession.expiresAt
+            ) {
+              secretSession.value = "";
+
+              showStatus(
+                "Merge session expired. Enter the Pilot secret and resume the command.",
+                "error",
+              );
+
+              return;
+            }
+
+            const repository =
+              pull.repository ||
+              CONTROL_REPOSITORY;
+
+            const confirmed =
+              window.confirm(
+                `Merge ${repository} PR #${pull.number} into main and delete its branch?`,
+              );
+
+            if (!confirmed) {
+              return;
+            }
+
+            merging = true;
+            button.disabled = true;
+            button.textContent =
+              "Merging…";
+
             showStatus(
-              `PR #${pull.number} merged successfully${result.branch_deleted ? " and its branch was deleted" : ""}.`,
-              "success",
+              `Validating and merging PR #${pull.number}…`,
             );
-          } catch (error) {
-            button.disabled = false;
-            button.textContent = `Retry merge PR #${pull.number}`;
-            showStatus(error.message || "Pull request could not be merged.", "error");
-          }
-        });
+
+            try {
+              const response =
+                await fetch(
+                  "/api/merge",
+                  {
+                    method: "POST",
+                    headers: {
+                      Authorization:
+                        `Bearer ${secretSession.value}`,
+                      "Content-Type":
+                        "application/json",
+                    },
+                    body:
+                      JSON.stringify({
+                        pr_number:
+                          pull.number,
+                        repository,
+                      }),
+                  },
+                );
+
+              const result =
+                await response
+                  .json()
+                  .catch(() => ({}));
+
+              if (!response.ok) {
+                const diagnostics =
+                  result.check_diagnostics;
+
+                const details = [];
+
+                for (
+                  const check of
+                    diagnostics
+                      ?.failing_check_runs ||
+                    []
+                ) {
+                  details.push(
+                    `Check failed: ${
+                      check.name ||
+                      "unnamed check"
+                    }`,
+                  );
+                }
+
+                for (
+                  const check of
+                    diagnostics
+                      ?.pending_check_runs ||
+                    []
+                ) {
+                  details.push(
+                    `Check pending: ${
+                      check.name ||
+                      "unnamed check"
+                    }`,
+                  );
+                }
+
+                for (
+                  const item of
+                    diagnostics
+                      ?.failing_commit_statuses ||
+                    []
+                ) {
+                  details.push(
+                    `Status failed: ${
+                      item.context ||
+                      "unnamed status"
+                    }`,
+                  );
+                }
+
+                for (
+                  const item of
+                    diagnostics
+                      ?.pending_commit_statuses ||
+                    []
+                ) {
+                  details.push(
+                    `Status pending: ${
+                      item.context ||
+                      "unnamed status"
+                    }`,
+                  );
+                }
+
+                throw new Error(
+                  [
+                    result.error ||
+                      `Merge failed (${response.status})`,
+                    ...details,
+                  ].join("\n"),
+                );
+              }
+
+              button.textContent =
+                `PR #${pull.number} merged`;
+
+              showStatus(
+                `PR #${pull.number} merged successfully. Verifying completion…`,
+                "success",
+              );
+            } catch (error) {
+              merging = false;
+              button.disabled = false;
+              button.textContent =
+                `Retry merge PR #${pull.number}`;
+
+              showStatus(
+                error.message ||
+                  "Pull request could not be merged.",
+                "error",
+              );
+            }
+          },
+        );
 
         results.append(button);
       }
 
-      function addSummary(workflow, pullRequests, newPullRequestCount) {
-        const summary = document.createElement("div");
-        summary.className = "result-summary";
+      async function monitorCommand(
+        commandId,
+        secretSession,
+      ) {
+        const deadline =
+          Date.now() + 120000;
 
-        const items = [
-          [
-            "Workflow",
-            workflow.conclusion === "success"
-              ? "Successful"
-              : workflow.conclusion || "Unknown",
-          ],
-          [
-            "New PRs",
-            String(newPullRequestCount),
-          ],
-        ];
+        while (
+          Date.now() < deadline
+        ) {
+          const response =
+            await fetch(
+              `/api/command?command_id=${encodeURIComponent(
+                commandId,
+              )}`,
+              {
+                headers: {
+                  Authorization:
+                    `Bearer ${secretSession.value}`,
+                },
+                cache: "no-store",
+              },
+            );
 
-        for (const [label, value] of items) {
-          const card = document.createElement("div");
-          card.className = "summary-card";
-
-          const labelElement = document.createElement("span");
-          labelElement.className = "summary-label";
-          labelElement.textContent = label;
-
-          const valueElement = document.createElement("strong");
-          valueElement.className = "summary-value";
-          valueElement.textContent = value;
-
-          card.append(labelElement, valueElement);
-          summary.append(card);
-        }
-
-        results.append(summary);
-      }
-
-      async function monitorPilot(secretSession, startedAt) {
-        const deadline = Date.now() + 90_000;
-
-        while (Date.now() < deadline) {
-          await wait(3_000);
-
-          const response = await fetch(
-            `/api/status?started_at=${encodeURIComponent(startedAt)}`,
-            {
-              method: "GET",
-              headers: { Authorization: `Bearer ${secretSession.value}` },
-              cache: "no-store",
-            },
-          );
-          const result = await response.json().catch(() => ({}));
+          const result =
+            await response
+              .json()
+              .catch(() => ({}));
 
           if (!response.ok) {
-            throw new Error(result.error || `Status check failed (${response.status})`);
-          }
-
-          if (!result.workflow) {
-            showStatus("Pilot accepted. Waiting for GitHub to start…");
-            continue;
-          }
-
-          if (result.workflow.status !== "completed") {
-            showStatus("Pilot is running in GitHub…");
-            continue;
+            throw new Error(
+              result.error ||
+                `Command lookup failed (${response.status})`,
+            );
           }
 
           results.replaceChildren();
-          const pullRequests = result.pull_requests || [];
-          const newPullRequestCount =
-            result.new_pull_request_count ?? pullRequests.length;
-          addSummary(result.workflow, pullRequests, newPullRequestCount);
-          addResultLink("Open workflow results", result.workflow.html_url);
 
-          for (const pull of pullRequests) {
-            const state = pull.draft ? "Draft" : "Ready";
+          const pull =
+            result.pull_request;
+
+          if (pull) {
             addResultLink(
-              `${state} PR #${pull.number}: ${pull.title}`,
+              `${
+                pull.merged
+                  ? "Merged"
+                  : "Open"
+              } PR #${pull.number}: ${pull.title}`,
               pull.html_url,
             );
-            addMergeButton(pull, secretSession);
+
+            if (!pull.merged) {
+              addMergeButton(
+                pull,
+                secretSession,
+              );
+            }
           }
 
-          if (result.workflow.conclusion === "success") {
-            const prMessage = newPullRequestCount
-              ? ` ${newPullRequestCount} new pull request${newPullRequestCount === 1 ? " is" : "s are"} ready below.`
-              : pullRequests.length
-                ? ` No new pull request was created. ${pullRequests.length} eligible open pull request${pullRequests.length === 1 ? " remains" : "s remain"} below.`
-                : " No new pull request was created.";
-            showStatus(`Pilot finished successfully.${prMessage}`, "success");
+          if (
+            result.state ===
+            "COMPLETED"
+          ) {
+            showStatus(
+              "Pilot command completed and production verification passed.",
+              "success",
+            );
+
+            return;
+          }
+
+          if (
+            result.state ===
+            "MERGED"
+          ) {
+            const verification =
+              result
+                .production_verification
+                ?.state;
+
+            showStatus(
+              verification ===
+                "TARGET_VERIFICATION_PENDING"
+                ? "PR merged. External production verification is not connected yet."
+                : "PR merged. Waiting for production verification…",
+              "success",
+            );
+
+            return;
+          }
+
+          if (
+            result.state ===
+            "AWAITING_APPROVAL"
+          ) {
+            showStatus(
+              `Pilot finished the build. PR #${
+                pull?.number || ""
+              } is ready for approval.`,
+              "success",
+            );
+
+            return;
+          }
+
+          if (
+            result.state ===
+              "RUNNING" ||
+            result.state ===
+              "DISPATCHING"
+          ) {
+            showStatus(
+              "Pilot is processing the encrypted package…",
+            );
           } else {
             showStatus(
-              `Pilot finished with ${result.workflow.conclusion || "an unknown result"}. Open the workflow below.`,
-              "error",
+              "Package queued securely. Waiting for Pilot processing…",
             );
           }
 
-          return;
+          await new Promise(
+            (resolve) =>
+              setTimeout(
+                resolve,
+                3000,
+              ),
+          );
         }
 
         showStatus(
-          "Pilot is taking longer than expected. Check GitHub Actions for the final result.",
+          "Pilot is still processing. Use Resume last command to continue checking.",
           "error",
         );
       }
 
-      form.addEventListener("submit", async (event) => {
-        event.preventDefault();
+      packageFile.addEventListener(
+        "change",
+        async () => {
+          const file =
+            packageFile.files?.[0];
 
-        let secret = secretInput.value;
-
-        if (!secret) {
-          showStatus("Enter the Pilot trigger secret.", "error");
-          return;
-        }
-
-        runButton.disabled = true;
-        runButton.textContent = "Starting…";
-        showStatus("Starting Pilot…");
-        results.replaceChildren();
-        const startedAt = new Date().toISOString();
-
-        try {
-          const response = await fetch("/api/dispatch", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${secret}` },
-          });
-
-          const result = await response.json().catch(() => ({}));
-
-          if (!response.ok) {
-            throw new Error(result.error || `Request failed (${response.status})`);
+          if (!file) {
+            return;
           }
 
-          secretInput.value = "";
-          showStatus("Pilot started. Checking GitHub progress now…", "success");
-          runButton.textContent = "Monitoring…";
-          const secretSession = {
-            value: secret,
-            expiresAt: Date.now() + 10 * 60 * 1000,
-          };
-          setTimeout(() => {
-            secretSession.value = "";
-          }, 10 * 60 * 1000);
-          await monitorPilot(secretSession, startedAt);
-        } catch (error) {
-          showStatus(error.message || "Pilot could not be started.", "error");
-        } finally {
-          secret = "";
-          runButton.disabled = false;
-          runButton.textContent = "Run now";
-        }
-      });
-
-      packageFileButton.addEventListener("click", () => packageFile.click());
-
-      packageFile.addEventListener("change", async () => {
-        approvedPackage = null;
-        clearPendingPackage();
-        packageReview.hidden = true;
-        packageSummary.replaceChildren();
-
-        const file = packageFile.files?.[0];
-        if (!file) return;
-        if (file.size > 100_000) {
-          packageFile.value = "";
-          showStatus("The selected package is too large.", "error");
-          return;
-        }
-
-        try {
-          const parsed = JSON.parse(await file.text());
-          const packageInfo = validatePackage(parsed);
-          approvedPackage = packageInfo.command;
-          rememberPendingPackage(approvedPackage);
-          showPackageReview(packageInfo);
-          showStatus("Review the package scope below before submitting it.");
-        } catch (error) {
-          packageFile.value = "";
-          showStatus(error.message || "The selected package is invalid.", "error");
-        }
-      });
-
-      packageSubmitButton.addEventListener("click", async () => {
-        let secret = secretInput.value;
-        if (!approvedPackage) {
-          showStatus("Import and review a Pilot package first.", "error");
-          return;
-        }
-        if (!secret) {
-          showStatus("Enter the Pilot trigger secret.", "error");
-          return;
-        }
-
-        const startedAt = new Date().toISOString();
-        setBusy(true);
-        packageSubmitButton.textContent = "Encrypting and submitting…";
-        results.replaceChildren();
-        showStatus("Submitting the approved package through the encrypted queue…");
-
-        try {
-          const response = await fetch("/api/queue", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${secret}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(approvedPackage),
-          });
-          const result = await response.json().catch(() => ({}));
-          if (!response.ok) {
-            throw new Error(result.error || `Package submission failed (${response.status})`);
-          }
-
-          window.PilotRecovery?.rememberCommandId?.(result.command_id);
-          resumeLastButton.hidden = false;
-          resumeLastButton.textContent = `Resume last command: ${result.command_id}`;
-
-          secretInput.value = "";
           approvedPackage = null;
-          clearPendingPackage();
-          packageFile.value = "";
           packageReview.hidden = true;
-          showStatus("Package queued securely. Monitoring GitHub now…", "success");
-          packageSubmitButton.textContent = "Monitoring…";
-          const secretSession = {
-            value: secret,
-            expiresAt: Date.now() + 10 * 60 * 1000,
-          };
-          setTimeout(() => {
-            secretSession.value = "";
-          }, 10 * 60 * 1000);
-          await monitorPilot(secretSession, startedAt);
-        } catch (error) {
-          showStatus(error.message || "The build package could not be submitted.", "error");
-        } finally {
-          secret = "";
-          setBusy(false);
-          packageSubmitButton.textContent = "Submit approved package";
-        }
-      });
+          packageSummary.replaceChildren();
 
-      queueTestButton.addEventListener("click", async () => {
-        let secret = secretInput.value;
+          if (file.size > 100000) {
+            packageFile.value = "";
 
-        if (!secret) {
-          showStatus("Enter the Pilot trigger secret.", "error");
-          return;
-        }
+            showStatus(
+              "The selected package is too large.",
+              "error",
+            );
 
-        const startedAt = new Date().toISOString();
-        const commandId = `pilot-private-queue-check-${Date.now()}`;
-        const verificationText = [
-          "Routalk Pilot private queue verification",
-          `Created: ${startedAt}`,
-          `Command: ${commandId}`,
-          "",
-        ].join("\n");
-
-        runButton.disabled = true;
-        queueTestButton.disabled = true;
-        queueTestButton.textContent = "Queueing…";
-        results.replaceChildren();
-        showStatus("Encrypting and queueing the verification command…");
-
-        try {
-          const response = await fetch("/api/queue", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${secret}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              command_id: commandId,
-              action: "apply",
-              branch: `chatgpt/${commandId}`,
-              files: [
-                {
-                  path: "pilot-private-queue-check.txt",
-                  content_b64: btoa(verificationText),
-                },
-              ],
-              commit_message: "Verify Routalk Pilot private queue",
-              pr_title: "Verify Routalk Pilot private queue",
-              pr_body:
-                "Harmless end-to-end verification of the authenticated encrypted Pilot queue.",
-            }),
-          });
-          const result = await response.json().catch(() => ({}));
-
-          if (!response.ok) {
-            throw new Error(result.error || `Queue request failed (${response.status})`);
+            return;
           }
 
-          window.PilotRecovery?.rememberCommandId?.(result.command_id);
-          resumeLastButton.hidden = false;
-          resumeLastButton.textContent = `Resume last command: ${result.command_id}`;
+          try {
+            const parsed =
+              JSON.parse(
+                await file.text(),
+              );
 
-          secretInput.value = "";
-          showStatus("Verification queued. Monitoring GitHub now…", "success");
-          queueTestButton.textContent = "Monitoring…";
+            const packageInfo =
+              validatePackage(parsed);
+
+            approvedPackage =
+              packageInfo.command;
+
+            savePendingPackage(
+              approvedPackage,
+            );
+
+            renderPackageReview(
+              packageInfo,
+            );
+
+            showStatus(
+              "Package loaded. Review the scope below before submitting.",
+              "success",
+            );
+          } catch (error) {
+            packageFile.value = "";
+
+            showStatus(
+              error.message ||
+                "The selected package is invalid.",
+              "error",
+            );
+          }
+        },
+      );
+
+      packageSubmitButton.addEventListener(
+        "click",
+        async () => {
+          let secret =
+            secretInput.value;
+
+          if (!approvedPackage) {
+            showStatus(
+              "Import and review a Pilot package first.",
+              "error",
+            );
+
+            return;
+          }
+
+          if (!secret) {
+            showStatus(
+              "Enter the Pilot trigger secret.",
+              "error",
+            );
+
+            return;
+          }
+
+          setPackageBusy(true);
+
+          packageSubmitButton.textContent =
+            "Encrypting and submitting…";
+
+          results.replaceChildren();
+
+          showStatus(
+            "Submitting the approved package through the encrypted queue…",
+          );
+
+          try {
+            const response =
+              await fetch(
+                "/api/queue",
+                {
+                  method: "POST",
+                  headers: {
+                    Authorization:
+                      `Bearer ${secret}`,
+                    "Content-Type":
+                      "application/json",
+                  },
+                  body:
+                    JSON.stringify(
+                      approvedPackage,
+                    ),
+                },
+              );
+
+            const result =
+              await response
+                .json()
+                .catch(() => ({}));
+
+            if (!response.ok) {
+              throw new Error(
+                result.error ||
+                  `Package submission failed (${response.status})`,
+              );
+            }
+
+            rememberCommand(
+              result.command_id,
+            );
+
+            clearPendingPackage();
+
+            approvedPackage = null;
+            packageFile.value = "";
+            packageReview.hidden = true;
+            secretInput.value = "";
+
+            const secretSession = {
+              value: secret,
+              expiresAt:
+                Date.now() +
+                10 * 60 * 1000,
+            };
+
+            setTimeout(() => {
+              secretSession.value = "";
+            }, 10 * 60 * 1000);
+
+            showStatus(
+              "Package queued securely. Following this command now…",
+              "success",
+            );
+
+            packageSubmitButton.textContent =
+              "Monitoring…";
+
+            await monitorCommand(
+              result.command_id,
+              secretSession,
+            );
+          } catch (error) {
+            showStatus(
+              error.message ||
+                "The build package could not be submitted.",
+              "error",
+            );
+          } finally {
+            secret = "";
+
+            setPackageBusy(false);
+
+            packageSubmitButton.textContent =
+              "Submit approved package";
+          }
+        },
+      );
+
+      resumeLastButton.addEventListener(
+        "click",
+        async () => {
+          const commandId =
+            readLastCommand();
+
+          const secret =
+            secretInput.value;
+
+          if (!commandId) {
+            return;
+          }
+
+          if (!secret) {
+            showStatus(
+              "Enter the Pilot trigger secret to resume the command.",
+              "error",
+            );
+
+            return;
+          }
+
           const secretSession = {
             value: secret,
-            expiresAt: Date.now() + 10 * 60 * 1000,
+            expiresAt:
+              Date.now() +
+              10 * 60 * 1000,
           };
-          setTimeout(() => {
-            secretSession.value = "";
-          }, 10 * 60 * 1000);
-          await monitorPilot(secretSession, startedAt);
-        } catch (error) {
-          showStatus(error.message || "Private queue verification failed.", "error");
-        } finally {
-          secret = "";
-          runButton.disabled = false;
-          queueTestButton.disabled = false;
-          queueTestButton.textContent = "Verify private queue";
-        }
-      });
+
+          secretInput.value = "";
+          results.replaceChildren();
+
+          showStatus(
+            `Resuming ${commandId}…`,
+          );
+
+          try {
+            await monitorCommand(
+              commandId,
+              secretSession,
+            );
+          } catch (error) {
+            showStatus(
+              error.message ||
+                "The command could not be resumed.",
+              "error",
+            );
+          }
+        },
+      );
+
+      form.addEventListener(
+        "submit",
+        async (event) => {
+          event.preventDefault();
+
+          let secret =
+            secretInput.value;
+
+          if (!secret) {
+            showStatus(
+              "Enter the Pilot trigger secret.",
+              "error",
+            );
+
+            return;
+          }
+
+          runButton.disabled = true;
+          runButton.textContent =
+            "Starting…";
+
+          results.replaceChildren();
+
+          showStatus(
+            "Starting Pilot…",
+          );
+
+          try {
+            const response =
+              await fetch(
+                "/api/dispatch",
+                {
+                  method: "POST",
+                  headers: {
+                    Authorization:
+                      `Bearer ${secret}`,
+                  },
+                },
+              );
+
+            const result =
+              await response
+                .json()
+                .catch(() => ({}));
+
+            if (!response.ok) {
+              throw new Error(
+                result.error ||
+                  `Request failed (${response.status})`,
+              );
+            }
+
+            secretInput.value = "";
+
+            showStatus(
+              "Pilot dispatch started successfully.",
+              "success",
+            );
+          } catch (error) {
+            showStatus(
+              error.message ||
+                "Pilot could not be started.",
+              "error",
+            );
+          } finally {
+            secret = "";
+
+            runButton.disabled = false;
+            runButton.textContent =
+              "Run now";
+          }
+        },
+      );
+
+      refreshResumeButton();
+      restorePendingPackage();
     </script>
   </body>
 </html>
