@@ -48,10 +48,19 @@ jobs:
           set -euo pipefail
           gh auth setup-git
 
+      - name: Create target GitHub App token
+        id: target-app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.PILOT_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PILOT_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Process encrypted Pilot queue
         shell: bash
         env:
           REQUESTED_COMMAND_ID: ${{ inputs.command_id }}
+          PILOT_GITHUB_APP_TOKEN: ${{ steps.target-app-token.outputs.token }}
         run: |
           set -euo pipefail
 
@@ -67,6 +76,11 @@ jobs:
 
           if [ -z "${PILOT_TARGET_REPOSITORIES:-}" ]; then
             echo "PILOT_TARGET_REPOSITORIES is not configured." >&2
+            exit 1
+          fi
+
+          if [ -z "${PILOT_GITHUB_APP_TOKEN:-}" ]; then
+            echo "GitHub App target token was not created." >&2
             exit 1
           fi
 
