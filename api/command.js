@@ -220,12 +220,17 @@ function verifierForRepository(repository) {
   return registeredVerifier(repository) || parseExternalVerifiers().get(repository) || null;
 }
 
-function runtimeOidcToken() {
-  const token = process.env.VERCEL_OIDC_TOKEN || "";
-  return typeof token === "string" ? token.trim() : "";
+function runtimeOidcToken(request) {
+  const headerToken = request?.headers?.["x-vercel-oidc-token"] || "";
+  if (typeof headerToken === "string" && headerToken.trim()) {
+    return headerToken.trim();
+  }
+
+  const envToken = process.env.VERCEL_OIDC_TOKEN || "";
+  return typeof envToken === "string" ? envToken.trim() : "";
 }
 
-async function verifyConfiguredTarget(repository, expectedRevision) {
+async function verifyConfiguredTarget(request, repository, expectedRevision) {
   const config = verifierForRepository(repository);
   if (!config) {
     return {
@@ -241,7 +246,7 @@ async function verifyConfiguredTarget(repository, expectedRevision) {
 
   let authorization;
   if (config.auth === "vercel_oidc") {
-    const oidcToken = runtimeOidcToken();
+    const oidcToken = runtimeOidcToken(request);
     if (!oidcToken) {
       return {
         checked: false,
@@ -522,7 +527,7 @@ module.exports = async function handler(request, response) {
     productionVerification =
       targetRepository === controlRepository
         ? await verifyControlProduction(request, triggerSecret, mergedRevision)
-        : await verifyConfiguredTarget(targetRepository, mergedRevision);
+        : await verifyConfiguredTarget(request, targetRepository, mergedRevision);
   }
 
   const state = deriveState(
