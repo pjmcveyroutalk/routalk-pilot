@@ -19,4 +19,7 @@ module.exports = Object.freeze({
       auth: "vercel_oidc",
     }),
   }),
+  "pjmcveyroutalk/wisconsin-vehicle-recovery": Object.freeze({
+    role: "target",
+  }),
 });
