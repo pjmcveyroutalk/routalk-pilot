@@ -14,5 +14,9 @@ module.exports = Object.freeze({
   }),
   "pjmcveyroutalk/flock-tuah": Object.freeze({
     role: "target",
+    production_verifier: Object.freeze({
+      url: "https://www.flocktuah.com/api/pilot-verify-production",
+      auth: "vercel_oidc",
+    }),
   }),
 });
