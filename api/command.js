@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const PROJECTS = require("../config/projects");
 const { COMMAND_STATES } = require("../lib/command-state");
 const {
   createGithubIssueCommandStore,
@@ -38,16 +39,25 @@ function validRepository(value) {
   );
 }
 
+function configuredTargetRepositories() {
+  const configured = process.env.PILOT_TARGET_REPOSITORIES || "";
+  return configured
+    .split(",")
+    .map((value) => value.trim())
+    .filter(validRepository);
+}
+
+function registeredTargetRepositories() {
+  return Object.keys(PROJECTS).filter(validRepository);
+}
+
 function allowedTargetRepositories() {
-  const configured =
-    process.env.PILOT_TARGET_REPOSITORIES || DEFAULT_TARGET_REPOSITORY;
   return [
-    ...new Set(
-      configured
-        .split(",")
-        .map((value) => value.trim())
-        .filter(validRepository),
-    ),
+    ...new Set([
+      DEFAULT_TARGET_REPOSITORY,
+      ...registeredTargetRepositories(),
+      ...configuredTargetRepositories(),
+    ]),
   ];
 }
 
@@ -131,6 +141,37 @@ async function observeDeployment(baseUrl, token, revision) {
   };
 }
 
+function validVerifierUrl(value) {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
+}
+
+function registeredVerifier(repository) {
+  const config = PROJECTS[repository]?.production_verifier;
+  if (
+    !config ||
+    typeof config !== "object" ||
+    !validVerifierUrl(config.url) ||
+    config.auth !== "vercel_oidc"
+  ) {
+    return null;
+  }
+
+  return {
+    url: new URL(config.url).toString(),
+    auth: "vercel_oidc",
+  };
+}
+
 function parseExternalVerifiers() {
   const raw = process.env.PILOT_TARGET_PRODUCTION_VERIFIERS || "";
   if (!raw.trim()) return new Map();
@@ -158,25 +199,16 @@ function parseExternalVerifiers() {
       continue;
     }
 
-    let url;
-    try {
-      url = new URL(config.url);
-    } catch {
-      continue;
-    }
-
     if (
-      url.protocol !== "https:" ||
-      url.username ||
-      url.password ||
-      url.hash ||
+      !validVerifierUrl(config.url) ||
       !/^[A-Z][A-Z0-9_]{2,120}$/.test(config.secret_env)
     ) {
       continue;
     }
 
     result.set(repository, {
-      url: url.toString(),
+      url: new URL(config.url).toString(),
+      auth: "shared_secret",
       secretEnv: config.secret_env,
     });
   }
@@ -184,8 +216,17 @@ function parseExternalVerifiers() {
   return result;
 }
 
+function verifierForRepository(repository) {
+  return registeredVerifier(repository) || parseExternalVerifiers().get(repository) || null;
+}
+
+function runtimeOidcToken() {
+  const token = process.env.VERCEL_OIDC_TOKEN || "";
+  return typeof token === "string" ? token.trim() : "";
+}
+
 async function verifyConfiguredTarget(repository, expectedRevision) {
-  const config = parseExternalVerifiers().get(repository);
+  const config = verifierForRepository(repository);
   if (!config) {
     return {
       checked: false,
@@ -198,17 +239,35 @@ async function verifyConfiguredTarget(repository, expectedRevision) {
     };
   }
 
-  const secret = process.env[config.secretEnv] || "";
-  if (!secret) {
-    return {
-      checked: false,
-      ready: false,
-      revision_match: false,
-      expected_revision: expectedRevision || null,
-      observed_revision: null,
-      state: "TARGET_VERIFICATION_SECRET_MISSING",
-      verified_at: null,
-    };
+  let authorization;
+  if (config.auth === "vercel_oidc") {
+    const oidcToken = runtimeOidcToken();
+    if (!oidcToken) {
+      return {
+        checked: false,
+        ready: false,
+        revision_match: false,
+        expected_revision: expectedRevision || null,
+        observed_revision: null,
+        state: "TARGET_OIDC_TOKEN_MISSING",
+        verified_at: null,
+      };
+    }
+    authorization = `Bearer ${oidcToken}`;
+  } else {
+    const secret = process.env[config.secretEnv] || "";
+    if (!secret) {
+      return {
+        checked: false,
+        ready: false,
+        revision_match: false,
+        expected_revision: expectedRevision || null,
+        observed_revision: null,
+        state: "TARGET_VERIFICATION_SECRET_MISSING",
+        verified_at: null,
+      };
+    }
+    authorization = `Bearer ${secret}`;
   }
 
   const controller = new AbortController();
@@ -223,7 +282,7 @@ async function verifyConfiguredTarget(repository, expectedRevision) {
     const result = await fetch(target, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${secret}`,
+        Authorization: authorization,
         Accept: "application/json",
       },
       cache: "no-store",
@@ -512,7 +571,10 @@ module.exports._test = {
   isTerminalQueueFailure,
   observeDeployment,
   parseExternalVerifiers,
+  registeredVerifier,
+  runtimeOidcToken,
   validCommandId,
   validRepository,
   validSha,
+  verifierForRepository,
 };
