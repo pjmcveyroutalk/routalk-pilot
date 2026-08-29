@@ -1,0 +1,4 @@
+Routalk Pilot recovery control proof
+Date: 2026-08-29
+Purpose: harmless end-to-end proof after restoring the Phase 25A baseline.
+This file contains no runtime code and is intentionally disposable after verification.
