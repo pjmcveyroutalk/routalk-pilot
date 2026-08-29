@@ -40,8 +40,11 @@ function credentialEnv(token) {
   return { GH_TOKEN: token, GITHUB_TOKEN: token };
 }
 function chooseRepositoryCredential(repository, appToken, fallbackToken, appAccessible) {
-  if (repository !== DEFAULT_REPOSITORY && appToken && appAccessible)
-    return { token: appToken, source: "github_app" };
+  if (repository !== DEFAULT_REPOSITORY && appToken) {
+    if (appAccessible)
+      return { token: appToken, source: "github_app" };
+    return { blocked: true, reason: "GITHUB_APP_TARGET_NOT_AUTHORIZED" };
+  }
   if (fallbackToken)
     return { token: fallbackToken, source: "existing_target_token" };
   return null;
@@ -68,6 +71,8 @@ function repositoryCredential(repository) {
     fallbackToken,
     appCanAccessRepository(repository, appToken),
   );
+  if (selected?.blocked)
+    fail(`GitHub App authorization is configured but cannot access ${repository}`);
   if (!selected)
     fail(`No GitHub credential can access ${repository}`);
   console.log(`[AUTH] ${repository}: ${selected.source}`);
