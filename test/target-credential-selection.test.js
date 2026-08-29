@@ -13,7 +13,7 @@ assert.deepEqual(
 
 assert.deepEqual(
   chooseRepositoryCredential(target, app, fallback, false),
-  { token: fallback, source: "existing_target_token" },
+  { blocked: true, reason: "GITHUB_APP_TARGET_NOT_AUTHORIZED" },
 );
 
 assert.deepEqual(
@@ -27,8 +27,8 @@ assert.deepEqual(
 );
 
 assert.equal(
-  chooseRepositoryCredential(target, app, "", false),
+  chooseRepositoryCredential(target, "", "", false),
   null,
 );
 
-console.log("Target credential selection — PASS");
+console.log("Target credential selection fail-closed — PASS");
