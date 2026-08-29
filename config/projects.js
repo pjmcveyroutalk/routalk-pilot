@@ -21,5 +21,9 @@ module.exports = Object.freeze({
   }),
   "pjmcveyroutalk/wisconsin-vehicle-recovery": Object.freeze({
     role: "target",
+    production_verifier: Object.freeze({
+      url: "https://wisconsin-vehicle-recovery.vercel.app/api/pilot-verify-production",
+      auth: "vercel_oidc",
+    }),
   }),
 });
