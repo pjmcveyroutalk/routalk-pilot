@@ -1,4 +1,0 @@
-Routalk Pilot secure package import verification
-Created: 2026-08-23T22:40:47.232899Z
-Command: pilot-package-import-check-1787524847232
-Purpose: harmless end-to-end package import test
