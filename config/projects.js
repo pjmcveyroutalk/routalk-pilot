@@ -12,4 +12,7 @@ module.exports = Object.freeze({
       auth: "vercel_oidc",
     }),
   }),
+  "pjmcveyroutalk/flock-tuah": Object.freeze({
+    role: "target",
+  }),
 });
