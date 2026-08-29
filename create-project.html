@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#09111f" />
+<title>Create a project — Routalk Pilot</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;background:#09111f;color:#f4f7fb}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top,#173156 0,transparent 42%),#09111f}
+main{width:min(100%,440px);padding:28px;border:1px solid #294467;border-radius:24px;background:rgba(12,24,42,.94);box-shadow:0 24px 70px rgba(0,0,0,.35)}
+.eyebrow{margin:0 0 8px;color:#6fe7d2;font-size:.78rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
+h1{margin:0;font-size:clamp(2rem,9vw,3rem)}
+.description{margin:12px 0 24px;color:#b8c7db;line-height:1.55}
+label{display:block;margin:16px 0 8px;font-size:.9rem;font-weight:700}
+input,textarea{width:100%;padding:12px 14px;border:1px solid #385779;border-radius:12px;background:#07101d;color:#fff;font:inherit}
+input{min-height:50px}
+textarea{min-height:84px;resize:vertical}
+input:focus,textarea:focus{outline:3px solid rgba(111,231,210,.24);border-color:#6fe7d2}
+.approval{display:flex;align-items:flex-start;gap:10px;margin-top:18px;color:#b8c7db;line-height:1.4}
+.approval input{width:20px;min-height:20px;margin:2px 0 0;flex:0 0 auto}
+button{width:100%;min-height:54px;margin-top:18px;border:0;border-radius:14px;background:#6fe7d2;color:#06131d;font:inherit;font-weight:900;cursor:pointer}
+button:disabled{cursor:not-allowed;opacity:.55}
+#status{min-height:24px;margin:16px 0 0;color:#b8c7db;font-size:.92rem;line-height:1.45;white-space:pre-line}
+#status[data-state="success"]{color:#7cf2bd}
+#status[data-state="error"]{color:#ff9a9a}
+.result-link{display:block;margin-top:14px;padding:12px 14px;border:1px solid #385779;border-radius:12px;color:#6fe7d2;font-weight:800;text-decoration:none}
+.helper{margin:8px 0 0;color:#8296b0;font-size:.78rem;line-height:1.45}
+</style>
+</head>
+<body>
+<main>
+<p class="eyebrow">Routalk Pilot</p>
+<h1>Create project</h1>
+<p class="description">Create a new private GitHub repository without leaving Pilot. Pilot initializes the repository so onboarding can continue immediately.</p>
+
+<form id="create-form">
+<label for="secret">Pilot trigger secret</label>
+<input id="secret" type="password" autocomplete="current-password" required />
+<p class="helper">Your secret is used only for this request and is not saved.</p>
+
+<label for="name">Project name</label>
+<input id="name" type="text" maxlength="100" autocomplete="off" placeholder="pilot-fresh-project-test" required />
+
+<label for="description">Description <span class="helper">(optional)</span></label>
+<textarea id="description" maxlength="200" placeholder="Clean-room Pilot onboarding test"></textarea>
+
+<label class="approval">
+<input id="approval" type="checkbox" />
+<span>I approve Pilot creating this <strong>private</strong> GitHub repository under the configured Pilot owner.</span>
+</label>
+
+<button id="create-button" type="submit" disabled>Create private project</button>
+</form>
+
+<p id="status" role="status" aria-live="polite"></p>
+<div id="result"></div>
+</main>
+
+<script>
+const form = document.querySelector("#create-form");
+const secret = document.querySelector("#secret");
+const nameInput = document.querySelector("#name");
+const description = document.querySelector("#description");
+const approval = document.querySelector("#approval");
+const button = document.querySelector("#create-button");
+const status = document.querySelector("#status");
+const result = document.querySelector("#result");
+
+function refreshButton() {
+  button.disabled = !approval.checked || !nameInput.value.trim() || !secret.value;
+}
+
+function showStatus(message, state = "") {
+  status.textContent = message;
+  status.dataset.state = state;
+}
+
+for (const element of [secret, nameInput, approval]) {
+  element.addEventListener("input", refreshButton);
+  element.addEventListener("change", refreshButton);
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!approval.checked) return;
+
+  const pilotSecret = secret.value;
+  const name = nameInput.value.trim();
+
+  button.disabled = true;
+  result.replaceChildren();
+  showStatus(`Creating private project ${name}…`);
+
+  try {
+    const response = await fetch("/api/create-project", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${pilotSecret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name,
+        description: description.value.trim(),
+      }),
+    });
+
+    secret.value = "";
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.error || `Project creation failed (${response.status}).`);
+    }
+
+    showStatus(
+      `Created ${data.repository}.\nThe repository is private and initialized. Pilot can continue onboarding.`,
+      "success",
+    );
+
+    if (data.url) {
+      const link = document.createElement("a");
+      link.className = "result-link";
+      link.href = data.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "Open created repository";
+      result.append(link);
+    }
+
+    approval.checked = false;
+  } catch (error) {
+    secret.value = "";
+    showStatus(error.message || "Project creation failed.", "error");
+  } finally {
+    refreshButton();
+  }
+});
+
+refreshButton();
+</script>
+</body>
+</html>

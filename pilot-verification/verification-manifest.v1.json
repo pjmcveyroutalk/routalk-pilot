@@ -1,9 +1,11 @@
 {
   "schema_version": 1,
   "name": "routalk-pilot-core-v2",
-  "description": "Provider-independent verification of the current canonical Routalk Pilot phone UI, queue, command observation, protected merge, command contracts/state, persistent store, processor, and exact production-verification surfaces.",
+  "description": "Provider-independent verification of the current canonical Routalk Pilot phone UI, queue, command observation, protected merge, command contracts/state, persistent store, processor, project creation, and exact production-verification surfaces.",
   "artifact_files": [
     "index.html",
+    "create-project.html",
+    "api/create-project.js",
     "api/queue.js",
     "api/command.js",
     "api/merge.js",
@@ -19,6 +21,16 @@
       "id": "index-exists",
       "type": "file_exists",
       "path": "index.html"
+    },
+    {
+      "id": "create-project-page-exists",
+      "type": "file_exists",
+      "path": "create-project.html"
+    },
+    {
+      "id": "create-project-api-exists",
+      "type": "file_exists",
+      "path": "api/create-project.js"
     },
     {
       "id": "queue-exists",
@@ -76,6 +88,23 @@
       "type": "contains",
       "path": "index.html",
       "text": "Resume last command"
+    },
+    {
+      "id": "project-create-approval-marker",
+      "type": "contains",
+      "path": "create-project.html",
+      "text": "I approve Pilot creating this"
+    },
+    {
+      "id": "project-create-private-marker",
+      "type": "contains",
+      "path": "create-project.html",
+      "text": "Create private project"
+    },
+    {
+      "id": "create-project-syntax",
+      "type": "node_syntax",
+      "path": "api/create-project.js"
     },
     {
       "id": "queue-syntax",
