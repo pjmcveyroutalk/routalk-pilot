@@ -27,21 +27,67 @@ function decryptEnvelope(envelope, secret) {
   } catch { fail("Pilot queue command authentication failed"); }
 }
 function run(args, options = {}) {
-  const result = spawnSync(args[0], args.slice(1), { cwd: options.cwd, encoding: "utf8", env: process.env });
+  const result = spawnSync(args[0], args.slice(1), {
+    cwd: options.cwd,
+    encoding: "utf8",
+    env: { ...process.env, ...(options.env || {}) },
+  });
   if (!options.allowFailure && result.status !== 0)
     fail(`Command failed: ${args.join(" ")}\nstdout: ${result.stdout || ""}\nstderr: ${result.stderr || ""}`);
   return result;
 }
-function remoteUrl(repository) { return `https://x-access-token:${process.env.GITHUB_TOKEN}@github.com/${repository}.git`; }
-function prepareWorkspace(repository) {
+function credentialEnv(token) {
+  return { GH_TOKEN: token, GITHUB_TOKEN: token };
+}
+function chooseRepositoryCredential(repository, appToken, fallbackToken, appAccessible) {
+  if (repository !== DEFAULT_REPOSITORY && appToken && appAccessible)
+    return { token: appToken, source: "github_app" };
+  if (fallbackToken)
+    return { token: fallbackToken, source: "existing_target_token" };
+  return null;
+}
+function appCanAccessRepository(repository, appToken) {
+  if (!appToken || repository === DEFAULT_REPOSITORY) return false;
+  const result = run(
+    ["gh", "api", `repos/${repository}`, "--silent"],
+    { allowFailure: true, env: credentialEnv(appToken) },
+  );
+  return result.status === 0;
+}
+function repositoryCredential(repository) {
+  const appToken = String(process.env.PILOT_GITHUB_APP_TOKEN || "").trim();
+  const fallbackToken = String(
+    process.env.PILOT_TARGET_GITHUB_TOKEN ||
+    process.env.GITHUB_TOKEN ||
+    process.env.GH_TOKEN ||
+    "",
+  ).trim();
+  const selected = chooseRepositoryCredential(
+    repository,
+    appToken,
+    fallbackToken,
+    appCanAccessRepository(repository, appToken),
+  );
+  if (!selected)
+    fail(`No GitHub credential can access ${repository}`);
+  console.log(`[AUTH] ${repository}: ${selected.source}`);
+  return { ...selected, env: credentialEnv(selected.token) };
+}
+function remoteUrl(repository, credential) {
+  return `https://x-access-token:${encodeURIComponent(credential.token)}@github.com/${repository}.git`;
+}
+function prepareWorkspace(repository, credential) {
   if (repository === DEFAULT_REPOSITORY) return process.cwd();
   const workspace = fs.mkdtempSync("/tmp/pilot-target-");
-  run(["git", "clone", "--depth", "1", "--branch", "main", remoteUrl(repository), workspace]);
+  run(["git", "clone", "--depth", "1", "--branch", "main", remoteUrl(repository, credential), workspace]);
   return workspace;
 }
 function ghRepoArgs(repository) { return ["--repo", repository]; }
-function prLedgerContains(commandId, repository) {
-  const result = run(["gh","pr","list",...ghRepoArgs(repository),"--state","all","--limit","1000","--json","number,body,url"], {allowFailure:true});
+function prLedgerContains(commandId, repository, credential) {
+  const result = run(
+    ["gh","pr","list",...ghRepoArgs(repository),"--state","all","--limit","1000","--json","number,body,url"],
+    { allowFailure:true, env: credential.env },
+  );
   if (result.status !== 0) fail("Could not inspect the pull request ledger");
   const marker = `Pilot queue command: \`${commandId}\``;
   return JSON.parse(result.stdout || "[]").some((pull) => String(pull.body || "").includes(marker));
@@ -51,11 +97,12 @@ function remoteBranchExists(branch, cwd) {
 }
 function prepareCommandBranch(command) {
   const repository = resolveRepository(command);
-  if (prLedgerContains(command.command_id, repository)) {
+  const credential = repositoryCredential(repository);
+  if (prLedgerContains(command.command_id, repository, credential)) {
     console.log(`[SKIP] ${command.command_id}: permanent PR ledger match`);
     return null;
   }
-  const cwd = prepareWorkspace(repository);
+  const cwd = prepareWorkspace(repository, credential);
   if (remoteBranchExists(command.branch, cwd)) {
     if (!command.branch.startsWith("chatgpt/"))
       fail(`Refusing to overwrite existing branch ${command.branch}`);
@@ -81,7 +128,7 @@ function prepareCommandBranch(command) {
   }
   run(["git","fetch","origin","main"], {cwd});
   run(["git","checkout","-B",command.branch,"origin/main"], {cwd});
-  return { repository, cwd };
+  return { repository, cwd, credential };
 }
 function configureCommitter(cwd) {
   run(["git","config","user.name","Routalk Pilot Queue"],{cwd});
@@ -138,14 +185,15 @@ function verifyPreparedWorkspace(repository, cwd) {
 
   console.log("[VERIFY] Canonical Routalk Pilot verification passed before PR creation");
 }
-function createPullRequest(command, repository, cwd) {
+function createPullRequest(command, repository, cwd, credential) {
   run(["git","push","--set-upstream","origin",command.branch],{cwd});
   const body = `${command.pr_body || ""}\n\n---\nPilot queue command: \`${command.command_id}\`\nCreated from the encrypted Routalk Pilot queue.`.trim();
   const created = run(["gh","pr","create",...ghRepoArgs(repository),"--base","main","--head",command.branch,
-    "--title",command.pr_title || `Pilot change: ${command.command_id}`,"--body",body],{cwd,allowFailure:true});
+    "--title",command.pr_title || `Pilot change: ${command.command_id}`,"--body",body],
+    {cwd,allowFailure:true,env:credential.env});
 
   if (created.status !== 0) {
-    if (prLedgerContains(command.command_id, repository)) {
+    if (prLedgerContains(command.command_id, repository, credential)) {
       console.log(`[OK] ${command.command_id}: pull request creation reconciled after ambiguous GitHub response`);
       return;
     }
@@ -164,7 +212,7 @@ function createPullRequest(command, repository, cwd) {
 function processApply(command) {
   const prepared = prepareCommandBranch(command);
   if (!prepared) return;
-  const { repository, cwd } = prepared;
+  const { repository, cwd, credential } = prepared;
   try {
     const writtenPaths = [];
     for (const file of command.files) {
@@ -185,7 +233,7 @@ function processApply(command) {
       "-m",command.commit_message || `Pilot queue: ${command.command_id}`,
       "-m",`Pilot queue command: ${command.command_id}`
     ],{cwd});
-    createPullRequest(command, repository, cwd);
+    createPullRequest(command, repository, cwd, credential);
   } finally { if (cwd !== process.cwd()) fs.rmSync(cwd,{recursive:true,force:true}); }
 }
 function findOpenQueueRecord(commandId) {
@@ -241,7 +289,7 @@ function currentBlobSha(path, cwd) {
 function processDelete(command) {
   const prepared = prepareCommandBranch(command);
   if (!prepared) return;
-  const { repository, cwd } = prepared;
+  const { repository, cwd, credential } = prepared;
   try {
     for (const item of command.deletions) {
       const observed = currentBlobSha(item.path, cwd);
@@ -257,7 +305,7 @@ function processDelete(command) {
       "-m",command.commit_message || `Pilot delete: ${command.command_id}`,
       "-m",`Pilot queue command: ${command.command_id}`
     ],{cwd});
-    createPullRequest(command, repository, cwd);
+    createPullRequest(command, repository, cwd, credential);
   } finally { if (cwd !== process.cwd()) fs.rmSync(cwd,{recursive:true,force:true}); }
 }
 function main() {
@@ -273,4 +321,8 @@ function main() {
   }
 }
 if (require.main === module) { try { main(); } catch(error) { console.error(`[ERROR] ${error.message || error}`); process.exitCode=1; } }
-module.exports = { decryptEnvelope, validateCommand };
+module.exports = {
+  decryptEnvelope,
+  validateCommand,
+  _test: { chooseRepositoryCredential },
+};
