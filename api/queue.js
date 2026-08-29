@@ -83,6 +83,9 @@ async function github(url, token, options = {}) {
   }
 }
 function readinessMessage(readiness) {
+  if (typeof readiness?.message === "string" && readiness.message.trim()) {
+    return readiness.message;
+  }
   switch (readiness.reason || readiness.next) {
     case "PROJECT_NOT_REGISTERED":
       return "Project is not ready for Pilot: register this repository in Pilot first.";
