@@ -4,6 +4,10 @@ module.exports = Object.freeze({
   }),
   "pjmcveyroutalk/sport-my-fitness": Object.freeze({
     role: "target",
+    production_verifier: Object.freeze({
+      url: "https://sport-my-fitness.vercel.app/api/pilot-verify-production",
+      auth: "vercel_oidc",
+    }),
   }),
   "pjmcveyroutalk/Personal-website-": Object.freeze({
     role: "target",
