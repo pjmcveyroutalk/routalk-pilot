@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#09111f" />
+<title>Pilot 25C Readiness Probe</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;background:#09111f;color:#f4f7fb}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#09111f}
+main{width:min(100%,440px);padding:24px;border:1px solid #294467;border-radius:20px;background:#0c182a}
+h1{margin:0 0 8px;font-size:1.7rem}
+p{color:#b8c7db;line-height:1.5}
+label{display:block;margin:16px 0 8px;font-weight:700}
+input{width:100%;min-height:50px;padding:12px 14px;border:1px solid #385779;border-radius:12px;background:#07101d;color:#fff;font:inherit}
+button{width:100%;min-height:54px;margin-top:18px;border:0;border-radius:14px;background:#6fe7d2;color:#06131d;font:inherit;font-weight:900}
+#result{margin-top:18px;padding:14px;border:1px solid #385779;border-radius:14px;white-space:pre-wrap;overflow-wrap:anywhere}
+#result[data-state="ready"]{border-color:#6fe7d2}
+#result[data-state="blocked"]{border-color:#ffb36b}
+.small{font-size:.8rem;color:#8296b0}
+</style>
+</head>
+<body>
+<main>
+<h1>Phase 25C readiness probe</h1>
+<p>This temporary probe uses Pilot's existing readiness API. It does not register or modify a project.</p>
+
+<label for="repository">Repository</label>
+<input id="repository" value="pjmcveyroutalk/sport-my-fitness" autocomplete="off" />
+
+<label for="secret">Pilot trigger secret</label>
+<input id="secret" type="password" autocomplete="current-password" />
+
+<button id="check" type="button">Check project readiness</button>
+<div id="result" aria-live="polite">Not checked yet.</div>
+<p class="small">The secret is used only for this request and is not stored.</p>
+</main>
+<script>
+const repositoryInput = document.querySelector("#repository");
+const secretInput = document.querySelector("#secret");
+const checkButton = document.querySelector("#check");
+const result = document.querySelector("#result");
+
+checkButton.addEventListener("click", async () => {
+  const repository = repositoryInput.value.trim();
+  const secret = secretInput.value;
+  if (!repository || !secret) {
+    result.dataset.state = "blocked";
+    result.textContent = "Enter the repository and Pilot trigger secret.";
+    return;
+  }
+
+  checkButton.disabled = true;
+  result.dataset.state = "";
+  result.textContent = "Checking…";
+
+  try {
+    const response = await fetch("/api/project-preflight", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${secret}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ repository })
+    });
+
+    const body = await response.json().catch(() => ({}));
+    const ready = body.ready === true;
+    result.dataset.state = ready ? "ready" : "blocked";
+
+    if (ready) {
+      result.textContent =
+        `READY\nRepository: ${body.repository || repository}\nNext: ${body.next_action || "QUEUE_BUILD"}`;
+    } else {
+      result.textContent =
+        `BLOCKED\nRepository: ${body.repository || repository}\nReason: ${body.reason || body.error || "UNKNOWN"}\nNext: ${body.next_action || "UNKNOWN"}\n${body.message || ""}`;
+    }
+  } catch (error) {
+    result.dataset.state = "blocked";
+    result.textContent = `CHECK FAILED\n${error.message || "Unknown error"}`;
+  } finally {
+    secretInput.value = "";
+    checkButton.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
