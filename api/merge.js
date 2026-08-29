@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const PROJECTS = require("../config/projects");
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10_000;
@@ -60,14 +61,15 @@ function validRepository(value) {
 }
 
 function allowedTargetRepositories() {
-  const configured =
-    process.env.PILOT_TARGET_REPOSITORIES || DEFAULT_TARGET_REPOSITORY;
-  return new Set(
-    configured
+  const configured = process.env.PILOT_TARGET_REPOSITORIES || "";
+  return new Set([
+    DEFAULT_TARGET_REPOSITORY,
+    ...Object.keys(PROJECTS).filter(validRepository),
+    ...configured
       .split(",")
       .map((value) => value.trim())
       .filter(validRepository),
-  );
+  ]);
 }
 
 async function github(url, token, options = {}) {
