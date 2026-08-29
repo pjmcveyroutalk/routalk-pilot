@@ -8,6 +8,7 @@ const { normalizeCommand } = require("../lib/command-contract");
 const {
   createGithubIssueCommandStore,
 } = require("../lib/stores/github-issue-command-store");
+const { _test: projectPreflight } = require("./project-preflight");
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10_000;
@@ -81,6 +82,24 @@ async function github(url, token, options = {}) {
     clearTimeout(timeout);
   }
 }
+function readinessMessage(readiness) {
+  switch (readiness.reason || readiness.next) {
+    case "PROJECT_NOT_REGISTERED":
+      return "Project is not ready for Pilot: register this repository in Pilot first.";
+    case "TARGET_ACCESS_NOT_CONFIGURED":
+    case "TARGET_REPO_NOT_ACCESSIBLE":
+      return "Project is not ready for Pilot: target repository access is missing. Add this repository to Pilot's target GitHub credential, then submit again.";
+    case "TARGET_REPO_CHECK_FAILED":
+      return "Pilot could not verify target repository access. Try again before submitting the build.";
+    case "INITIALIZE_MAIN":
+      return "Project is not ready for Pilot: initialize the repository's main branch, then submit again.";
+    case "REGISTER_PRODUCTION_VERIFIER":
+      return "Project is not ready for Pilot: register its production verifier before submitting a build.";
+    default:
+      return "Project is not ready for Pilot.";
+  }
+}
+
 module.exports = async function handler(request, response) {
   const requestId = crypto.randomUUID();
   setSecurityHeaders(response, requestId);
@@ -115,6 +134,29 @@ module.exports = async function handler(request, response) {
   if (!validRepositoryPart(owner) || !validRepositoryPart(repository) || !validWorkflow(workflow)) {
     return send(response, 503, requestId, { error: "Pilot queue configuration is invalid" });
   }
+
+  const controlRepository = `${owner}/${repository}`;
+  if (command.repository !== controlRepository) {
+    const targetToken = process.env.PILOT_TARGET_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
+    let readiness;
+    try {
+      readiness = await projectPreflight.checkProjectReadiness(command.repository, targetToken);
+    } catch {
+      readiness = {
+        ready: false,
+        repository: command.repository,
+        reason: "TARGET_REPO_CHECK_FAILED",
+      };
+    }
+    if (!readiness.ready) {
+      return send(response, 409, requestId, {
+        error: readinessMessage(readiness),
+        code: "PROJECT_NOT_READY",
+        readiness,
+      });
+    }
+  }
+
   const baseUrl = `${GITHUB_API}/repos/${owner}/${repository}`;
   const envelope = encryptCommand(command, queueSecret);
   const githubStore = createGithubIssueCommandStore({
@@ -172,4 +214,4 @@ module.exports = async function handler(request, response) {
     recovery: dispatched.ok ? undefined : "The scheduled recovery cycle will process this command",
   });
 };
-module.exports._test = { encryptCommand, normalizeCommand };
+module.exports._test = { encryptCommand, normalizeCommand, readinessMessage };
