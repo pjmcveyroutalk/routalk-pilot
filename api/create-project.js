@@ -71,17 +71,88 @@ async function github(path, token, options = {}) {
     });
 
     const data = await result.json().catch(() => ({}));
-    return { ok: result.ok, status: result.status, data };
+    return {
+      ok: result.ok,
+      status: result.status,
+      data,
+      acceptedPermissions:
+        result.headers.get("x-accepted-github-permissions") || "",
+      oauthScopes: result.headers.get("x-oauth-scopes") || "",
+    };
   } catch (error) {
     return {
       ok: false,
       status: 0,
       timedOut: error?.name === "AbortError",
       data: {},
+      acceptedPermissions: "",
+      oauthScopes: "",
     };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function classifyCreateFailure(result) {
+  const githubMessage = String(result.data?.message || "").trim();
+
+  if (result.timedOut) {
+    return {
+      httpStatus: 504,
+      code: "GITHUB_TIMEOUT",
+      error: "GitHub did not respond before Pilot's project-creation timeout.",
+    };
+  }
+
+  if (result.status === 401) {
+    return {
+      httpStatus: 502,
+      code: "GITHUB_CREDENTIAL_REJECTED",
+      error:
+        "GitHub rejected Pilot's project-creation credential. The credential must be repaired before Pilot can create projects.",
+    };
+  }
+
+  if (result.status === 403) {
+    return {
+      httpStatus: 409,
+      code: "GITHUB_REPOSITORY_CREATE_PERMISSION_REQUIRED",
+      error:
+        "Pilot reached GitHub, but its GitHub credential is not allowed to create this repository. Project creation requires repository Administration: write permission (or an equivalent classic-token repo scope).",
+    };
+  }
+
+  if (result.status === 422) {
+    const alreadyExists =
+      Array.isArray(result.data?.errors) &&
+      result.data.errors.some((item) =>
+        String(item?.message || "").toLowerCase().includes("already exists"),
+      );
+
+    if (alreadyExists) {
+      return {
+        httpStatus: 409,
+        code: "REPOSITORY_ALREADY_EXISTS",
+        error: "A repository with that name already exists.",
+      };
+    }
+
+    return {
+      httpStatus: 400,
+      code: "GITHUB_REPOSITORY_VALIDATION_FAILED",
+      error: githubMessage
+        ? `GitHub rejected the repository settings: ${githubMessage}`
+        : "GitHub rejected the repository settings.",
+    };
+  }
+
+  return {
+    httpStatus: 502,
+    code: "GITHUB_REPOSITORY_CREATE_FAILED",
+    error: githubMessage
+      ? `GitHub did not create the project repository: ${githubMessage}`
+      : "GitHub did not create the project repository.",
+  };
 }
 
 module.exports = async function handler(request, response) {
@@ -107,6 +178,7 @@ module.exports = async function handler(request, response) {
   if (!triggerSecret || !githubToken) {
     return send(response, 503, requestId, {
       error: "Pilot project creation is not configured",
+      code: "PROJECT_CREATION_NOT_CONFIGURED",
     });
   }
 
@@ -126,6 +198,7 @@ module.exports = async function handler(request, response) {
     return send(response, 400, requestId, {
       error:
         "Project name must be 1–100 characters using only letters, numbers, dot, dash, or underscore.",
+      code: "INVALID_PROJECT_NAME",
     });
   }
 
@@ -133,17 +206,20 @@ module.exports = async function handler(request, response) {
   try {
     description = normalizeDescription(body.description);
   } catch (error) {
-    return send(response, 400, requestId, { error: error.message });
+    return send(response, 400, requestId, {
+      error: error.message,
+      code: "INVALID_PROJECT_DESCRIPTION",
+    });
   }
 
-  const expectedOwner =
-    process.env.PILOT_GITHUB_OWNER ||
-    "pjmcveyroutalk";
+  const expectedOwner = process.env.PILOT_GITHUB_OWNER || "pjmcveyroutalk";
 
   const identity = await github("/user", githubToken);
   if (!identity.ok) {
     return send(response, identity.timedOut ? 504 : 502, requestId, {
       error: "Pilot could not verify its GitHub identity before project creation.",
+      code: "GITHUB_IDENTITY_CHECK_FAILED",
+      github_status: identity.status || null,
     });
   }
 
@@ -153,7 +229,9 @@ module.exports = async function handler(request, response) {
     actualOwner.toLowerCase() !== expectedOwner.toLowerCase()
   ) {
     return send(response, 403, requestId, {
-      error: "Pilot refused project creation because the GitHub owner does not match its configured owner.",
+      error:
+        "Pilot refused project creation because the GitHub owner does not match its configured owner.",
+      code: "GITHUB_OWNER_MISMATCH",
     });
   }
 
@@ -171,24 +249,20 @@ module.exports = async function handler(request, response) {
   });
 
   if (!created.ok) {
-    const alreadyExists =
-      created.status === 422 &&
-      Array.isArray(created.data?.errors) &&
-      created.data.errors.some((item) =>
-        String(item?.message || "").toLowerCase().includes("already exists"),
-      );
+    const failure = classifyCreateFailure(created);
 
-    return send(
-      response,
-      alreadyExists ? 409 : created.timedOut ? 504 : 502,
-      requestId,
-      {
-        error: alreadyExists
-          ? "A repository with that name already exists."
-          : "GitHub did not create the project repository.",
-        github_status: created.status || null,
-      },
-    );
+    return send(response, failure.httpStatus, requestId, {
+      error: failure.error,
+      code: failure.code,
+      github_status: created.status || null,
+      github_message: String(created.data?.message || "").trim() || null,
+      accepted_permissions: created.acceptedPermissions || null,
+      oauth_scopes: created.oauthScopes || null,
+      next_action:
+        failure.code === "GITHUB_REPOSITORY_CREATE_PERMISSION_REQUIRED"
+          ? "REPAIR_GITHUB_PROJECT_CREATION_PERMISSION"
+          : "RETRY_AFTER_DIAGNOSIS",
+    });
   }
 
   const fullName = String(created.data?.full_name || `${actualOwner}/${name}`);
@@ -208,6 +282,7 @@ module.exports = async function handler(request, response) {
 };
 
 module.exports._test = {
+  classifyCreateFailure,
   normalizeDescription,
   validProjectName,
 };
