@@ -11,6 +11,21 @@ function safeEqual(left, right) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+function parseCookies(header) {
+  return Object.fromEntries(
+    String(header || "")
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const index = part.indexOf("=");
+        return index === -1
+          ? [part, ""]
+          : [part.slice(0, index), decodeURIComponent(part.slice(index + 1))];
+      }),
+  );
+}
+
 function setSecurityHeaders(response, requestId) {
   response.setHeader("Cache-Control", "no-store, max-age=0");
   response.setHeader("Pragma", "no-cache");
@@ -27,24 +42,17 @@ function send(response, status, requestId, body) {
 function readBody(request) {
   if (!request.body) return {};
   if (typeof request.body === "object") return request.body;
-  try {
-    return JSON.parse(request.body);
-  } catch {
-    return {};
-  }
+  try { return JSON.parse(request.body); } catch { return {}; }
 }
 
 function validRepository(value) {
-  return (
-    typeof value === "string" &&
-    /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value)
-  );
+  return typeof value === "string" &&
+    /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value);
 }
 
 async function vercel(path, token, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), VERCEL_TIMEOUT_MS);
-
   try {
     const result = await fetch(`${VERCEL_API}${path}`, {
       ...options,
@@ -55,69 +63,41 @@ async function vercel(path, token, options = {}) {
       },
       signal: controller.signal,
     });
-
     const data = await result.json().catch(() => ({}));
     return { ok: result.ok, status: result.status, data };
   } catch (error) {
-    return {
-      ok: false,
-      status: 0,
-      timedOut: error?.name === "AbortError",
-      data: {},
-    };
+    return { ok: false, status: 0, timedOut: error?.name === "AbortError", data: {} };
   } finally {
     clearTimeout(timeout);
   }
 }
 
 function classifyFailure(result) {
-  const message = String(
-    result.data?.error?.message ||
-    result.data?.message ||
-    "",
-  ).trim();
-
+  const message = String(result.data?.error?.message || result.data?.message || "").trim();
   if (result.timedOut) {
-    return {
-      status: 504,
-      code: "VERCEL_TIMEOUT",
-      error: "Vercel did not respond before Pilot's provisioning timeout.",
-    };
+    return { status: 504, code: "VERCEL_TIMEOUT", error: "Vercel did not respond before Pilot's provisioning timeout." };
   }
-
   if (result.status === 401 || result.status === 403) {
     return {
       status: 409,
-      code: "VERCEL_CREDENTIAL_REQUIRED",
-      error:
-        "Pilot reached Vercel, but its Vercel management credential is missing, expired, or not authorized for the configured team.",
+      code: "VERCEL_AUTHORIZATION_REQUIRED",
+      error: "Pilot reached Vercel, but this browser session is not authorized to manage the configured team.",
     };
   }
-
-  if (message.toLowerCase().includes("install") &&
-      message.toLowerCase().includes("github")) {
+  if (message.toLowerCase().includes("install") && message.toLowerCase().includes("github")) {
     return {
       status: 409,
       code: "VERCEL_GITHUB_INTEGRATION_REQUIRED",
-      error:
-        "Vercel cannot link this private GitHub repository until the Vercel GitHub integration has access to it.",
+      error: "Vercel cannot link this private GitHub repository until its GitHub integration has access to it.",
     };
   }
-
   if (result.status === 409) {
-    return {
-      status: 409,
-      code: "VERCEL_PROJECT_CONFLICT",
-      error: message || "A Vercel project with this name already exists.",
-    };
+    return { status: 409, code: "VERCEL_PROJECT_CONFLICT", error: message || "A Vercel project with this name already exists." };
   }
-
   return {
     status: 502,
     code: "VERCEL_PROJECT_CREATE_FAILED",
-    error: message
-      ? `Vercel did not create the deployment project: ${message}`
-      : "Vercel did not create the deployment project.",
+    error: message ? `Vercel did not create the deployment project: ${message}` : "Vercel did not create the deployment project.",
   };
 }
 
@@ -136,7 +116,9 @@ module.exports = async function handler(request, response) {
   }
 
   const triggerSecret = process.env.PILOT_TRIGGER_SECRET;
+  const cookies = parseCookies(request.headers.cookie);
   const vercelToken =
+    cookies.pilot_vercel_access_token ||
     process.env.PILOT_VERCEL_TOKEN ||
     process.env.VERCEL_TOKEN ||
     "";
@@ -152,17 +134,13 @@ module.exports = async function handler(request, response) {
   }
 
   const authorization = request.headers.authorization || "";
-  const supplied = authorization.startsWith("Bearer ")
-    ? authorization.slice(7)
-    : "";
-
+  const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   if (!safeEqual(supplied, triggerSecret)) {
     return send(response, 401, requestId, { error: "Unauthorized" });
   }
 
   const body = readBody(request);
-  const repository =
-    typeof body.repository === "string" ? body.repository.trim() : "";
+  const repository = typeof body.repository === "string" ? body.repository.trim() : "";
 
   if (!validRepository(repository)) {
     return send(response, 400, requestId, {
@@ -182,15 +160,13 @@ module.exports = async function handler(request, response) {
 
   if (!vercelToken) {
     return send(response, 409, requestId, {
-      error:
-        "Pilot needs a one-time Vercel management credential before it can create deployment projects.",
-      code: "VERCEL_CREDENTIAL_REQUIRED",
-      next_action: "CONFIGURE_PILOT_VERCEL_TOKEN",
+      error: "Connect Vercel to Pilot before provisioning this deployment project.",
+      code: "VERCEL_AUTHORIZATION_REQUIRED",
+      next_action: "CONNECT_VERCEL",
     });
   }
 
   const name = repository.split("/")[1].toLowerCase();
-
   const existing = await vercel(
     `/v9/projects/${encodeURIComponent(name)}?teamId=${encodeURIComponent(teamId)}`,
     vercelToken,
@@ -201,10 +177,7 @@ module.exports = async function handler(request, response) {
       created: false,
       already_exists: true,
       repository,
-      project: {
-        id: existing.data?.id || null,
-        name: existing.data?.name || name,
-      },
+      project: { id: existing.data?.id || null, name: existing.data?.name || name },
       expected_production_url: `https://${name}.vercel.app`,
       next_action: "WAIT_FOR_PRODUCTION_DEPLOYMENT",
     });
@@ -217,8 +190,8 @@ module.exports = async function handler(request, response) {
       code: failure.code,
       vercel_status: existing.status || null,
       next_action:
-        failure.code === "VERCEL_CREDENTIAL_REQUIRED"
-          ? "CONFIGURE_PILOT_VERCEL_TOKEN"
+        failure.code === "VERCEL_AUTHORIZATION_REQUIRED"
+          ? "CONNECT_VERCEL"
           : "RETRY_AFTER_DIAGNOSIS",
     });
   }
@@ -230,10 +203,7 @@ module.exports = async function handler(request, response) {
       method: "POST",
       body: JSON.stringify({
         name,
-        gitRepository: {
-          type: "github",
-          repo: repository,
-        },
+        gitRepository: { type: "github", repo: repository },
       }),
     },
   );
@@ -245,8 +215,8 @@ module.exports = async function handler(request, response) {
       code: failure.code,
       vercel_status: created.status || null,
       next_action:
-        failure.code === "VERCEL_CREDENTIAL_REQUIRED"
-          ? "CONFIGURE_PILOT_VERCEL_TOKEN"
+        failure.code === "VERCEL_AUTHORIZATION_REQUIRED"
+          ? "CONNECT_VERCEL"
           : failure.code === "VERCEL_GITHUB_INTEGRATION_REQUIRED"
             ? "REPAIR_VERCEL_GITHUB_REPOSITORY_ACCESS"
             : "RETRY_AFTER_DIAGNOSIS",
@@ -256,16 +226,10 @@ module.exports = async function handler(request, response) {
   return send(response, 201, requestId, {
     created: true,
     repository,
-    project: {
-      id: created.data?.id || null,
-      name: created.data?.name || name,
-    },
+    project: { id: created.data?.id || null, name: created.data?.name || name },
     expected_production_url: `https://${name}.vercel.app`,
     next_action: "WAIT_FOR_PRODUCTION_DEPLOYMENT",
   });
 };
 
-module.exports._test = {
-  classifyFailure,
-  validRepository,
-};
+module.exports._test = { classifyFailure, parseCookies, validRepository };
