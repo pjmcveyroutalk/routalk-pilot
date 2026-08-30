@@ -121,6 +121,53 @@ function classifyFailure(result) {
   };
 }
 
+function selectProductionDomain(data) {
+  const domains = Array.isArray(data?.domains) ? data.domains : [];
+  const candidates = domains
+    .filter((item) =>
+      item &&
+      typeof item.name === "string" &&
+      item.name.trim() &&
+      item.verified !== false &&
+      !item.redirect
+    )
+    .map((item) => ({
+      name: item.name.trim().toLowerCase(),
+      production: item.gitBranch == null && item.customEnvironmentId == null,
+    }));
+
+  const selected =
+    candidates.find((item) => item.production) ||
+    candidates[0] ||
+    null;
+
+  return selected ? `https://${selected.name}` : null;
+}
+
+async function productionUrlForProject(projectIdOrName, token, teamId) {
+  const domains = await vercel(
+    `/v9/projects/${encodeURIComponent(projectIdOrName)}/domains?production=true&teamId=${encodeURIComponent(teamId)}`,
+    token,
+  );
+
+  if (!domains.ok) {
+    return {
+      ok: false,
+      status: domains.status,
+      timedOut: domains.timedOut,
+      data: domains.data,
+    };
+  }
+
+  const url = selectProductionDomain(domains.data);
+  return {
+    ok: Boolean(url),
+    status: domains.status,
+    url,
+    data: domains.data,
+  };
+}
+
 module.exports = async function handler(request, response) {
   const requestId = crypto.randomUUID();
   setSecurityHeaders(response, requestId);
@@ -197,6 +244,19 @@ module.exports = async function handler(request, response) {
   );
 
   if (existing.ok) {
+    const projectId = existing.data?.id || name;
+    const production = await productionUrlForProject(projectId, vercelToken, teamId);
+
+    if (!production.ok) {
+      return send(response, 409, requestId, {
+        error:
+          "Vercel project exists, but Pilot could not resolve an authoritative production domain yet.",
+        code: "VERCEL_PRODUCTION_DOMAIN_NOT_READY",
+        vercel_status: production.status || null,
+        next_action: "WAIT_FOR_PRODUCTION_DOMAIN",
+      });
+    }
+
     return send(response, 200, requestId, {
       created: false,
       already_exists: true,
@@ -205,7 +265,8 @@ module.exports = async function handler(request, response) {
         id: existing.data?.id || null,
         name: existing.data?.name || name,
       },
-      expected_production_url: `https://${name}.vercel.app`,
+      production_url: production.url,
+      expected_production_url: production.url,
       next_action: "WAIT_FOR_PRODUCTION_DEPLOYMENT",
     });
   }
@@ -253,6 +314,24 @@ module.exports = async function handler(request, response) {
     });
   }
 
+  const projectId = created.data?.id || name;
+  const production = await productionUrlForProject(projectId, vercelToken, teamId);
+
+  if (!production.ok) {
+    return send(response, 201, requestId, {
+      created: true,
+      repository,
+      project: {
+        id: created.data?.id || null,
+        name: created.data?.name || name,
+      },
+      production_url: null,
+      expected_production_url: null,
+      production_domain_pending: true,
+      next_action: "WAIT_FOR_PRODUCTION_DOMAIN",
+    });
+  }
+
   return send(response, 201, requestId, {
     created: true,
     repository,
@@ -260,7 +339,8 @@ module.exports = async function handler(request, response) {
       id: created.data?.id || null,
       name: created.data?.name || name,
     },
-    expected_production_url: `https://${name}.vercel.app`,
+    production_url: production.url,
+    expected_production_url: production.url,
     next_action: "WAIT_FOR_PRODUCTION_DEPLOYMENT",
   });
 };
@@ -268,4 +348,5 @@ module.exports = async function handler(request, response) {
 module.exports._test = {
   classifyFailure,
   validRepository,
+  selectProductionDomain,
 };
