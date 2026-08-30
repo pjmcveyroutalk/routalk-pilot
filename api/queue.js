@@ -13,6 +13,7 @@ const { _test: projectPreflight } = require("./project-preflight");
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10_000;
 const MAX_BODY_BYTES = 100_000;
+const VERIFIER_BOOTSTRAP_PATH = "api/pilot-verify-production.js";
 
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(left || "");
@@ -97,10 +98,22 @@ function readinessMessage(readiness) {
     case "INITIALIZE_MAIN":
       return "Project is not ready for Pilot: initialize the repository's main branch, then submit again.";
     case "REGISTER_PRODUCTION_VERIFIER":
-      return "Project is not ready for Pilot: register its production verifier before submitting a build.";
+      return "Project is registered, but its production verifier is not ready yet.";
     default:
       return "Project is not ready for Pilot.";
   }
+}
+
+function isVerifierBootstrapCommand(command, readiness) {
+  return (
+    readiness?.reason === "REGISTER_PRODUCTION_VERIFIER" &&
+    command?.action === "apply" &&
+    Array.isArray(command.files) &&
+    command.files.length === 1 &&
+    command.files[0]?.path === VERIFIER_BOOTSTRAP_PATH &&
+    Array.isArray(command.deletions) &&
+    command.deletions.length === 0
+  );
 }
 
 module.exports = async function handler(request, response) {
@@ -139,6 +152,7 @@ module.exports = async function handler(request, response) {
   }
 
   const controlRepository = `${owner}/${repository}`;
+  let onboardingBootstrap = false;
   if (command.repository !== controlRepository) {
     const targetToken = process.env.PILOT_TARGET_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
     let readiness;
@@ -151,7 +165,10 @@ module.exports = async function handler(request, response) {
         reason: "TARGET_REPO_CHECK_FAILED",
       };
     }
-    if (!readiness.ready) {
+
+    onboardingBootstrap = isVerifierBootstrapCommand(command, readiness);
+
+    if (!readiness.ready && !onboardingBootstrap) {
       return send(response, 409, requestId, {
         error: readinessMessage(readiness),
         code: "PROJECT_NOT_READY",
@@ -198,7 +215,7 @@ module.exports = async function handler(request, response) {
     commandRecord = transitionCommandRecord(
       commandRecord,
       COMMAND_STATES.DISPATCHING,
-      { metadata: { dispatch_started: true } },
+      { metadata: { dispatch_started: true, onboarding_bootstrap: onboardingBootstrap } },
     );
   } else {
     console.warn("Pilot command queued; immediate dispatch failed", {
@@ -213,8 +230,15 @@ module.exports = async function handler(request, response) {
     queue_record: commandRecord.storage_record,
     state: commandRecord.state,
     command_record: commandRecord,
+    onboarding_bootstrap: onboardingBootstrap,
     dispatch_started: dispatched.ok,
     recovery: dispatched.ok ? undefined : "The scheduled recovery cycle will process this command",
   });
 };
-module.exports._test = { encryptCommand, normalizeCommand, readinessMessage };
+
+module.exports._test = {
+  encryptCommand,
+  isVerifierBootstrapCommand,
+  normalizeCommand,
+  readinessMessage,
+};

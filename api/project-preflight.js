@@ -6,6 +6,8 @@ const READINESS_STATUS = Object.freeze({
   BLOCKED: "BLOCKED",
 });
 
+const VERIFIER_BOOTSTRAP_PATH = "api/pilot-verify-production.js";
+
 function safeEqual(a, b) {
   const x = Buffer.from(a || "");
   const y = Buffer.from(b || "");
@@ -54,13 +56,18 @@ function registryReadiness(repository) {
     return blocked(
       repository,
       "REGISTER_PRODUCTION_VERIFIER",
-      "Project is not ready for Pilot: register its production verifier before submitting a build.",
-      "REGISTER_PRODUCTION_VERIFIER",
+      "Project is registered, but its production verifier is not ready yet.",
+      "BOOTSTRAP_PRODUCTION_VERIFIER",
       {
         registered: true,
         production_verifier: verifier
           ? { configured: true, auth: verifier.auth, url: verifier.url }
           : { configured: false },
+        verifier_bootstrap: {
+          allowed: true,
+          action: "apply",
+          paths: [VERIFIER_BOOTSTRAP_PATH],
+        },
         checks: {
           registration: "PASS",
           production_verifier: "BLOCKED",
@@ -112,6 +119,7 @@ async function checkProjectReadiness(repository) {
 
 module.exports._test = {
   READINESS_STATUS,
+  VERIFIER_BOOTSTRAP_PATH,
   registryReadiness,
   checkProjectReadiness,
 };
