@@ -4,11 +4,15 @@ const { COMMAND_STATES } = require("../lib/command-state");
 const {
   createGithubIssueCommandStore,
 } = require("../lib/stores/github-issue-command-store");
+const {
+  observeDeploymentByRevision,
+} = require("../lib/vercel-deployment-observer");
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10_000;
 const PRODUCTION_VERIFY_TIMEOUT_MS = 8_000;
 const DEFAULT_TARGET_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
+const DEFAULT_VERCEL_TEAM_ID = "team_jC9jlJ9GZ9GSjrbYoD0pin3U";
 
 function safeEqual(left, right) {
   const a = Buffer.from(left || "");
@@ -97,9 +101,9 @@ async function github(url, token, options = {}) {
   }
 }
 
-async function observeDeployment(baseUrl, token, revision) {
+async function observeDeploymentFromGithub(baseUrl, token, revision) {
   if (!validSha(revision)) {
-    return { checked: false, state: "UNKNOWN", ready: false };
+    return { checked: false, state: "UNKNOWN", ready: false, source: "github_status" };
   }
 
   const result = await github(`${baseUrl}/commits/${revision}/status`, token);
@@ -109,6 +113,7 @@ async function observeDeployment(baseUrl, token, revision) {
       state: "UNKNOWN",
       ready: false,
       http_status: result.status,
+      source: "github_status",
     };
   }
 
@@ -138,7 +143,47 @@ async function observeDeployment(baseUrl, token, revision) {
     context: observed?.context || null,
     target_url: observed?.target_url || null,
     observed_at: new Date().toISOString(),
+    source: "github_status",
   };
+}
+
+async function observeDeployment(repository, githubBaseUrl, githubToken, revision) {
+  if (!validSha(revision)) {
+    return { checked: false, state: "UNKNOWN", ready: false, source: "none" };
+  }
+
+  const vercelToken =
+    process.env.PILOT_VERCEL_TOKEN ||
+    process.env.VERCEL_TOKEN ||
+    "";
+  const teamId =
+    process.env.PILOT_VERCEL_TEAM_ID ||
+    DEFAULT_VERCEL_TEAM_ID;
+  const projectId = validRepository(repository)
+    ? repository.split("/")[1].toLowerCase()
+    : "";
+
+  if (vercelToken && projectId) {
+    const observed = await observeDeploymentByRevision({
+      projectId,
+      revision,
+      token: vercelToken,
+      teamId,
+    });
+
+    if (
+      observed?.checked &&
+      observed.state !== "VERCEL_LOOKUP_FAILED" &&
+      observed.state !== "VERCEL_TIMEOUT"
+    ) {
+      return {
+        ...observed,
+        source: "vercel_api",
+      };
+    }
+  }
+
+  return observeDeploymentFromGithub(githubBaseUrl, githubToken, revision);
 }
 
 function validVerifierUrl(value) {
@@ -519,6 +564,7 @@ module.exports = async function handler(request, response) {
   if (pullRequest?.merged_at && targetRepository) {
     const targetBaseUrl = `${GITHUB_API}/repos/${targetRepository}`;
     deploymentObservation = await observeDeployment(
+      targetRepository,
       targetBaseUrl,
       githubToken,
       mergedRevision,
@@ -575,6 +621,7 @@ module.exports._test = {
   deriveState,
   isTerminalQueueFailure,
   observeDeployment,
+  observeDeploymentFromGithub,
   parseExternalVerifiers,
   registeredVerifier,
   runtimeOidcToken,
