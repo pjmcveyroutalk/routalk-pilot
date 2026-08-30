@@ -32,5 +32,9 @@ module.exports = Object.freeze({
   }),
   "pjmcveyroutalk/pilot-fresh-project-test": Object.freeze({
     role: "target",
+    production_verifier: Object.freeze({
+      url: "https://pilot-fresh-project-test-git-main-routalk-builder.vercel.app/api/pilot-verify-production",
+      auth: "vercel_oidc",
+    }),
   }),
 });
