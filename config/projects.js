@@ -30,4 +30,7 @@ module.exports = Object.freeze({
       auth: "vercel_oidc",
     }),
   }),
+  "pjmcveyroutalk/pilot-fresh-project-test": Object.freeze({
+    role: "target",
+  }),
 });

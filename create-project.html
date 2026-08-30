@@ -20,12 +20,12 @@ textarea{min-height:84px;resize:vertical}
 input:focus,textarea:focus{outline:3px solid rgba(111,231,210,.24);border-color:#6fe7d2}
 .approval{display:flex;align-items:flex-start;gap:10px;margin-top:18px;color:#b8c7db;line-height:1.4}
 .approval input{width:20px;min-height:20px;margin:2px 0 0;flex:0 0 auto}
-button{width:100%;min-height:54px;margin-top:18px;border:0;border-radius:14px;background:#6fe7d2;color:#06131d;font:inherit;font-weight:900;cursor:pointer}
+button,.result-link{width:100%;min-height:54px;margin-top:18px;border:0;border-radius:14px;background:#6fe7d2;color:#06131d;font:inherit;font-weight:900;cursor:pointer}
 button:disabled{cursor:not-allowed;opacity:.55}
 #status{min-height:24px;margin:16px 0 0;color:#b8c7db;font-size:.92rem;line-height:1.45;white-space:pre-line}
 #status[data-state="success"]{color:#7cf2bd}
 #status[data-state="error"]{color:#ff9a9a}
-.result-link{display:block;margin-top:14px;padding:12px 14px;border:1px solid #385779;border-radius:12px;color:#6fe7d2;font-weight:800;text-decoration:none}
+.result-link{display:grid;place-items:center;padding:12px 14px;border:1px solid #385779;background:transparent;color:#6fe7d2;text-align:center;text-decoration:none}
 .helper{margin:8px 0 0;color:#8296b0;font-size:.78rem;line-height:1.45}
 </style>
 </head>
@@ -33,7 +33,7 @@ button:disabled{cursor:not-allowed;opacity:.55}
 <main>
 <p class="eyebrow">Routalk Pilot</p>
 <h1>Create project</h1>
-<p class="description">Create a new private GitHub repository without leaving Pilot. Pilot initializes the repository so onboarding can continue immediately.</p>
+<p class="description">Create a new private GitHub repository without leaving Pilot. Pilot initializes the repository and prepares its registration for review so onboarding can continue.</p>
 
 <form id="create-form">
 <label for="secret">Pilot trigger secret</label>
@@ -59,6 +59,7 @@ button:disabled{cursor:not-allowed;opacity:.55}
 </main>
 
 <script>
+const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v3";
 const form = document.querySelector("#create-form");
 const secret = document.querySelector("#secret");
 const nameInput = document.querySelector("#name");
@@ -75,6 +76,30 @@ function refreshButton() {
 function showStatus(message, state = "") {
   status.textContent = message;
   status.dataset.state = state;
+}
+
+function saveRegistrationPackage(command) {
+  try {
+    localStorage.setItem(
+      PENDING_PACKAGE_KEY,
+      JSON.stringify({ saved_at: Date.now(), command }),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function addResultLink(label, href, external = false) {
+  const link = document.createElement("a");
+  link.className = "result-link";
+  link.href = href;
+  if (external) {
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+  }
+  link.textContent = label;
+  result.append(link);
 }
 
 for (const element of [secret, nameInput, approval]) {
@@ -113,19 +138,24 @@ form.addEventListener("submit", async (event) => {
       throw new Error(data.error || `Project creation failed (${response.status}).`);
     }
 
+    let registrationStaged = false;
+    if (data.registration_package) {
+      registrationStaged = saveRegistrationPackage(data.registration_package);
+    }
+
     showStatus(
-      `Created ${data.repository}.\nThe repository is private and initialized. Pilot can continue onboarding.`,
+      registrationStaged
+        ? `Created ${data.repository}.\nThe repository is private and initialized. Pilot prepared its registration package for your review.`
+        : `Created ${data.repository}.\nThe repository is private and initialized. Pilot can continue onboarding.`,
       "success",
     );
 
+    if (registrationStaged) {
+      addResultLink("Review project registration in Pilot", "/");
+    }
+
     if (data.url) {
-      const link = document.createElement("a");
-      link.className = "result-link";
-      link.href = data.url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.textContent = "Open created repository";
-      result.append(link);
+      addResultLink("Open created repository", data.url, true);
     }
 
     approval.checked = false;
