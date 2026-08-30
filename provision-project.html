@@ -2,142 +2,53 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="theme-color" content="#09111f" />
 <title>Provision deployment — Routalk Pilot</title>
 <style>
 :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;background:#09111f;color:#f4f7fb}
-*{box-sizing:border-box}
-body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top,#173156 0,transparent 42%),#09111f}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top,#173156 0,transparent 42%),#09111f}
 main{width:min(100%,440px);padding:28px;border:1px solid #294467;border-radius:24px;background:rgba(12,24,42,.94);box-shadow:0 24px 70px rgba(0,0,0,.35)}
-.eyebrow{margin:0 0 8px;color:#6fe7d2;font-size:.78rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
-h1{margin:0;font-size:clamp(2rem,9vw,3rem)}
-.description{margin:12px 0 24px;color:#b8c7db;line-height:1.55}
-label{display:block;margin:16px 0 8px;font-size:.9rem;font-weight:700}
+.eyebrow{margin:0 0 8px;color:#6fe7d2;font-size:.78rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase}h1{margin:0;font-size:clamp(2rem,9vw,3rem)}
+.description{margin:12px 0 24px;color:#b8c7db;line-height:1.55}label{display:block;margin:16px 0 8px;font-size:.9rem;font-weight:700}
 input{width:100%;min-height:50px;padding:12px 14px;border:1px solid #385779;border-radius:12px;background:#07101d;color:#fff;font:inherit}
-input:focus{outline:3px solid rgba(111,231,210,.24);border-color:#6fe7d2}
-.approval{display:flex;align-items:flex-start;gap:10px;margin-top:18px;color:#b8c7db;line-height:1.4}
-.approval input{width:20px;min-height:20px;margin:2px 0 0;flex:0 0 auto}
-button,.result-link{width:100%;min-height:54px;margin-top:18px;border:0;border-radius:14px;background:#6fe7d2;color:#06131d;font:inherit;font-weight:900;cursor:pointer}
-button:disabled{cursor:not-allowed;opacity:.55}
-#status{min-height:24px;margin:16px 0 0;color:#b8c7db;font-size:.92rem;line-height:1.45;white-space:pre-line}
-#status[data-state="success"]{color:#7cf2bd}
-#status[data-state="error"]{color:#ff9a9a}
-.result-link{display:grid;place-items:center;padding:12px 14px;border:1px solid #385779;background:transparent;color:#6fe7d2;text-align:center;text-decoration:none}
+.approval{display:flex;align-items:flex-start;gap:10px;margin-top:18px;color:#b8c7db;line-height:1.4}.approval input{width:20px;min-height:20px;margin:2px 0 0;flex:0 0 auto}
+button,.action{width:100%;min-height:54px;margin-top:18px;border:0;border-radius:14px;background:#6fe7d2;color:#06131d;font:inherit;font-weight:900;cursor:pointer}
+button:disabled{cursor:not-allowed;opacity:.55}.action{display:grid;place-items:center;padding:12px 14px;text-decoration:none}.secondary{border:1px solid #385779;background:transparent;color:#6fe7d2}
+#status{min-height:24px;margin:16px 0 0;color:#b8c7db;font-size:.92rem;line-height:1.45;white-space:pre-line}#status[data-state="success"]{color:#7cf2bd}#status[data-state="error"]{color:#ff9a9a}
 .helper{margin:8px 0 0;color:#8296b0;font-size:.78rem;line-height:1.45}
 </style>
 </head>
-<body>
-<main>
-<p class="eyebrow">Routalk Pilot</p>
-<h1>Provision deployment</h1>
-<p class="description">Create and link the Vercel deployment project for a registered Pilot repository. This does not bypass Pilot's verifier or merge gates.</p>
-
+<body><main>
+<p class="eyebrow">Routalk Pilot</p><h1>Provision deployment</h1>
+<p class="description">Connect Vercel once, then let Pilot create and link the deployment project for this registered repository.</p>
+<div id="connect"></div>
 <form id="form">
-<label for="secret">Pilot trigger secret</label>
-<input id="secret" type="password" autocomplete="current-password" required />
+<label for="secret">Pilot trigger secret</label><input id="secret" type="password" autocomplete="current-password" required />
 <p class="helper">Your secret is used only for this request and is not saved.</p>
-
-<label for="repository">Repository</label>
-<input id="repository" type="text" autocomplete="off" placeholder="owner/project" required />
-
-<label class="approval">
-<input id="approval" type="checkbox" />
-<span>I approve Pilot creating or locating the deployment project for this registered repository.</span>
-</label>
-
+<label for="repository">Repository</label><input id="repository" type="text" autocomplete="off" placeholder="owner/project" required />
+<label class="approval"><input id="approval" type="checkbox" /><span>I approve Pilot creating or locating the deployment project for this registered repository.</span></label>
 <button id="button" type="submit" disabled>Provision deployment project</button>
 </form>
-
-<p id="status" role="status" aria-live="polite"></p>
-<div id="result"></div>
-</main>
-
+<p id="status" role="status" aria-live="polite"></p><div id="result"></div>
 <script>
-const form = document.querySelector("#form");
-const secret = document.querySelector("#secret");
-const repository = document.querySelector("#repository");
-const approval = document.querySelector("#approval");
-const button = document.querySelector("#button");
-const status = document.querySelector("#status");
-const result = document.querySelector("#result");
-
-const initialRepository = new URLSearchParams(location.search).get("repository");
-if (initialRepository) repository.value = initialRepository;
-
-function refreshButton() {
-  button.disabled = !approval.checked || !repository.value.trim() || !secret.value;
-}
-
-function showStatus(message, state = "") {
-  status.textContent = message;
-  status.dataset.state = state;
-}
-
-function addResultLink(label, href) {
-  const link = document.createElement("a");
-  link.className = "result-link";
-  link.href = href;
-  link.target = "_blank";
-  link.rel = "noopener noreferrer";
-  link.textContent = label;
-  result.append(link);
-}
-
-for (const element of [secret, repository, approval]) {
-  element.addEventListener("input", refreshButton);
-  element.addEventListener("change", refreshButton);
-}
-
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!approval.checked) return;
-
-  const pilotSecret = secret.value;
-  const repo = repository.value.trim();
-
-  button.disabled = true;
-  result.replaceChildren();
-  showStatus(`Provisioning deployment project for ${repo}…`);
-
-  try {
-    const response = await fetch("/api/provision-vercel-project", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${pilotSecret}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ repository: repo }),
-    });
-
-    secret.value = "";
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      throw new Error(data.error || `Deployment provisioning failed (${response.status}).`);
-    }
-
-    showStatus(
-      data.already_exists
-        ? `Deployment project already exists for ${repo}.`
-        : `Deployment project created and linked for ${repo}.`,
-      "success",
-    );
-
-    if (data.expected_production_url) {
-      addResultLink("Open expected production URL", data.expected_production_url);
-    }
-
-    approval.checked = false;
-  } catch (error) {
-    secret.value = "";
-    showStatus(error.message || "Deployment provisioning failed.", "error");
-  } finally {
-    refreshButton();
-  }
+const form=document.querySelector("#form"),secret=document.querySelector("#secret"),repository=document.querySelector("#repository"),approval=document.querySelector("#approval"),button=document.querySelector("#button"),status=document.querySelector("#status"),result=document.querySelector("#result"),connect=document.querySelector("#connect");
+const initialRepository=new URLSearchParams(location.search).get("repository");if(initialRepository)repository.value=initialRepository;
+function refresh(){button.disabled=!approval.checked||!repository.value.trim()||!secret.value}
+function show(message,state=""){status.textContent=message;status.dataset.state=state}
+function link(label,href,secondary=false){const a=document.createElement("a");a.className=`action${secondary?" secondary":""}`;a.href=href;a.textContent=label;return a}
+function connectLink(){const repo=repository.value.trim();const returnTo=`/provision-project.html${repo?`?repository=${encodeURIComponent(repo)}`:""}`;const a=link("Connect Vercel",`/api/vercel-auth-start?return_to=${encodeURIComponent(returnTo)}`,true);connect.replaceChildren(a)}
+for(const el of[secret,repository,approval]){el.addEventListener("input",()=>{refresh();connectLink()});el.addEventListener("change",()=>{refresh();connectLink()})}
+form.addEventListener("submit",async event=>{
+event.preventDefault();if(!approval.checked)return;const pilotSecret=secret.value,repo=repository.value.trim();button.disabled=true;result.replaceChildren();show(`Provisioning deployment project for ${repo}…`);
+try{
+const response=await fetch("/api/provision-vercel-project",{method:"POST",headers:{Authorization:`Bearer ${pilotSecret}`,"Content-Type":"application/json"},body:JSON.stringify({repository:repo})});
+secret.value="";const data=await response.json().catch(()=>({}));
+if(!response.ok){if(data.next_action==="CONNECT_VERCEL"){connectLink();show(`${data.error}\nUse Connect Vercel above, then retry this same step.`,"error");return}throw new Error(data.error||`Deployment provisioning failed (${response.status}).`)}
+show(data.already_exists?`Deployment project already exists for ${repo}.`:`Deployment project created and linked for ${repo}.`,"success");
+if(data.expected_production_url){const a=link("Open expected production URL",data.expected_production_url,true);a.target="_blank";a.rel="noopener noreferrer";result.append(a)}
+approval.checked=false
+}catch(error){secret.value="";show(error.message||"Deployment provisioning failed.","error")}finally{refresh()}
 });
-
-refreshButton();
-</script>
-</body>
-</html>
+connectLink();refresh();
+</script></main></body></html>
