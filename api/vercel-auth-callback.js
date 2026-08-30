@@ -8,9 +8,7 @@ function parseCookies(header) {
       .filter(Boolean)
       .map((part) => {
         const index = part.indexOf("=");
-        return index === -1
-          ? [part, ""]
-          : [part.slice(0, index), decodeURIComponent(part.slice(index + 1))];
+        return index === -1 ? [part, ""] : [part.slice(0, index), decodeURIComponent(part.slice(index + 1))];
       }),
   );
 }
@@ -34,9 +32,14 @@ module.exports = async function handler(req, res) {
   const clientId = process.env.VERCEL_INTEGRATION_CLIENT_ID || "";
   const clientSecret = process.env.VERCEL_INTEGRATION_CLIENT_SECRET || "";
   if (!clientId || !clientSecret) {
+    const missing = [];
+    if (!clientId) missing.push("VERCEL_INTEGRATION_CLIENT_ID");
+    if (!clientSecret) missing.push("VERCEL_INTEGRATION_CLIENT_SECRET");
     return res.status(503).json({
       error: "Pilot's Vercel Integration credentials are not configured yet.",
       code: "VERCEL_INTEGRATION_NOT_CONFIGURED",
+      missing,
+      next_action: "CONFIGURE_VERCEL_INTEGRATION_CREDENTIALS",
     });
   }
 
@@ -97,9 +100,7 @@ module.exports = async function handler(req, res) {
   ]);
 
   const safeReturnTo =
-    returnTo.startsWith("/") && !returnTo.startsWith("//")
-      ? returnTo
-      : "/provision-project.html";
+    returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/provision-project.html";
 
   if (next && next.startsWith("https://vercel.com/")) {
     return res.redirect(302, next);
