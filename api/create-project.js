@@ -1,8 +1,10 @@
 const crypto = require("node:crypto");
+const PROJECTS = require("../config/projects");
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 10_000;
 const MAX_BODY_BYTES = 4_000;
+const CONTROL_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
 
 function safeEqual(left, right) {
   const a = Buffer.from(left || "");
@@ -155,6 +157,68 @@ function classifyCreateFailure(result) {
   };
 }
 
+function renderProjects(projects) {
+  const lines = ["module.exports = Object.freeze({"];
+
+  for (const [repository, project] of Object.entries(projects)) {
+    lines.push(`  ${JSON.stringify(repository)}: Object.freeze({`);
+    lines.push(`    role: ${JSON.stringify(project.role)},`);
+
+    if (project.production_verifier) {
+      lines.push("    production_verifier: Object.freeze({");
+      lines.push(
+        `      url: ${JSON.stringify(project.production_verifier.url)},`,
+      );
+      lines.push(
+        `      auth: ${JSON.stringify(project.production_verifier.auth)},`,
+      );
+      lines.push("    }),");
+    }
+
+    lines.push("  }),");
+  }
+
+  lines.push("});", "");
+  return lines.join("\n");
+}
+
+function buildRegistrationPackage(repository, requestId) {
+  if (PROJECTS[repository]) return null;
+
+  const projects = {
+    ...PROJECTS,
+    [repository]: Object.freeze({ role: "target" }),
+  };
+
+  const suffix = crypto
+    .createHash("sha256")
+    .update(`${repository}:${requestId}`)
+    .digest("hex")
+    .slice(0, 12);
+
+  const projectName = repository.split("/")[1]
+    .replace(/[^A-Za-z0-9._-]/g, "-")
+    .slice(0, 56);
+
+  return {
+    version: 1,
+    command_id: `PILOT-REGISTER-${suffix}`,
+    action: "apply",
+    repository: CONTROL_REPOSITORY,
+    branch: `chatgpt/register-${projectName}-${suffix}`,
+    files: [
+      {
+        path: "config/projects.js",
+        content_b64: Buffer.from(renderProjects(projects)).toString("base64"),
+      },
+    ],
+    commit_message: `Register ${repository} as a Pilot target`,
+    pr_title: `Onboarding: register ${projectName}`,
+    pr_body:
+      "Pilot-created project registration. This adds the repository as a target through the normal guarded Pilot queue and explicit merge-approval path. Production verification remains intentionally unconfigured so readiness can identify that as a separate onboarding requirement.",
+  };
+}
+
 module.exports = async function handler(request, response) {
   const requestId = crypto.randomUUID();
   setSecurityHeaders(response, requestId);
@@ -269,6 +333,7 @@ module.exports = async function handler(request, response) {
   const htmlUrl = String(
     created.data?.html_url || `https://github.com/${fullName}`,
   );
+  const registrationPackage = buildRegistrationPackage(fullName, requestId);
 
   return send(response, 201, requestId, {
     created: true,
@@ -277,12 +342,18 @@ module.exports = async function handler(request, response) {
     visibility: "private",
     initialized: true,
     default_branch: created.data?.default_branch || "main",
-    next_action: "RUN_PILOT_ONBOARDING",
+    registration_required: Boolean(registrationPackage),
+    registration_package: registrationPackage,
+    next_action: registrationPackage
+      ? "REVIEW_PROJECT_REGISTRATION"
+      : "RUN_PILOT_ONBOARDING",
   });
 };
 
 module.exports._test = {
+  buildRegistrationPackage,
   classifyCreateFailure,
   normalizeDescription,
+  renderProjects,
   validProjectName,
 };
