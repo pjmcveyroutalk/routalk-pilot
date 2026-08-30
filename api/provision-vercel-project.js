@@ -81,7 +81,7 @@ function classifyFailure(result) {
     return {
       status: 409,
       code: "VERCEL_AUTHORIZATION_REQUIRED",
-      error: "Pilot reached Vercel, but this browser session is not authorized to manage the configured team.",
+      error: "Pilot's Vercel Integration is not authorized to manage the selected team.",
     };
   }
   if (message.toLowerCase().includes("install") && message.toLowerCase().includes("github")) {
@@ -123,8 +123,9 @@ module.exports = async function handler(request, response) {
     process.env.VERCEL_TOKEN ||
     "";
   const teamId =
+    cookies.pilot_vercel_team_id ||
     process.env.PILOT_VERCEL_TEAM_ID ||
-    "team_jC9jlJ9GZ9GSjrbYoD0pin3U";
+    "";
 
   if (!triggerSecret) {
     return send(response, 503, requestId, {
@@ -158,17 +159,18 @@ module.exports = async function handler(request, response) {
     });
   }
 
-  if (!vercelToken) {
+  if (!vercelToken || !teamId) {
     return send(response, 409, requestId, {
-      error: "Connect Vercel to Pilot before provisioning this deployment project.",
+      error: "Install Routalk Pilot on the Vercel team before provisioning this deployment project.",
       code: "VERCEL_AUTHORIZATION_REQUIRED",
       next_action: "CONNECT_VERCEL",
     });
   }
 
   const name = repository.split("/")[1].toLowerCase();
+  const teamQuery = `teamId=${encodeURIComponent(teamId)}`;
   const existing = await vercel(
-    `/v9/projects/${encodeURIComponent(name)}?teamId=${encodeURIComponent(teamId)}`,
+    `/v9/projects/${encodeURIComponent(name)}?${teamQuery}`,
     vercelToken,
   );
 
@@ -197,7 +199,7 @@ module.exports = async function handler(request, response) {
   }
 
   const created = await vercel(
-    `/v11/projects?teamId=${encodeURIComponent(teamId)}`,
+    `/v11/projects?${teamQuery}`,
     vercelToken,
     {
       method: "POST",

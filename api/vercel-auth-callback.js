@@ -31,12 +31,12 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const clientId = process.env.VERCEL_APP_CLIENT_ID || "";
-  const clientSecret = process.env.VERCEL_APP_CLIENT_SECRET || "";
+  const clientId = process.env.VERCEL_INTEGRATION_CLIENT_ID || "";
+  const clientSecret = process.env.VERCEL_INTEGRATION_CLIENT_SECRET || "";
   if (!clientId || !clientSecret) {
     return res.status(503).json({
-      error: "Pilot's Vercel authorization app is not configured yet.",
-      code: "VERCEL_OAUTH_APP_NOT_CONFIGURED",
+      error: "Pilot's Vercel Integration credentials are not configured yet.",
+      code: "VERCEL_INTEGRATION_NOT_CONFIGURED",
     });
   }
 
@@ -44,27 +44,28 @@ module.exports = async function handler(req, res) {
   const code = String(req.query?.code || "");
   const state = String(req.query?.state || "");
   const expectedState = cookies.pilot_vercel_oauth_state || "";
-  const verifier = cookies.pilot_vercel_code_verifier || "";
+  const callbackTeamId = String(req.query?.teamId || "");
+  const configurationId = String(req.query?.configurationId || "");
+  const next = String(req.query?.next || "");
   const returnTo = cookies.pilot_vercel_return_to || "/provision-project.html";
 
-  if (!code || !state || !expectedState || !verifier || !safeEqual(state, expectedState)) {
+  if (!code || !state || !expectedState || !safeEqual(state, expectedState)) {
     return res.status(400).json({
-      error: "Vercel authorization could not be completed because the authorization state was invalid or expired.",
-      code: "VERCEL_OAUTH_STATE_INVALID",
+      error: "Vercel Integration authorization state was invalid or expired.",
+      code: "VERCEL_INTEGRATION_STATE_INVALID",
     });
   }
 
   const origin = `https://${req.headers.host}`;
+  const redirectUri = `${origin}/api/vercel-auth-callback`;
   const body = new URLSearchParams({
-    grant_type: "authorization_code",
     client_id: clientId,
     client_secret: clientSecret,
     code,
-    code_verifier: verifier,
-    redirect_uri: `${origin}/api/vercel-auth-callback`,
+    redirect_uri: redirectUri,
   });
 
-  const tokenResponse = await fetch("https://api.vercel.com/login/oauth/token", {
+  const tokenResponse = await fetch("https://api.vercel.com/v2/oauth/access_token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
@@ -73,31 +74,35 @@ module.exports = async function handler(req, res) {
   const data = await tokenResponse.json().catch(() => ({}));
   if (!tokenResponse.ok || !data.access_token) {
     return res.status(502).json({
-      error: "Vercel did not complete Pilot authorization.",
-      code: "VERCEL_OAUTH_TOKEN_EXCHANGE_FAILED",
+      error: "Vercel did not complete Pilot Integration authorization.",
+      code: "VERCEL_INTEGRATION_TOKEN_EXCHANGE_FAILED",
       vercel_status: tokenResponse.status,
     });
   }
 
-  const maxAge = Math.max(60, Number(data.expires_in) || 3600);
-  const responseCookies = [
-    cookie("pilot_vercel_access_token", data.access_token, maxAge),
-    cookie("pilot_vercel_oauth_state", "", 0),
-    cookie("pilot_vercel_code_verifier", "", 0),
-    cookie("pilot_vercel_return_to", "", 0),
-  ];
-
-  if (data.refresh_token) {
-    responseCookies.push(
-      cookie("pilot_vercel_refresh_token", data.refresh_token, 60 * 60 * 24 * 30),
-    );
+  const teamId = String(data.team_id || callbackTeamId || "");
+  if (!teamId) {
+    return res.status(409).json({
+      error: "Install Routalk Pilot on the routalk-builder team, not a personal Vercel account.",
+      code: "VERCEL_TEAM_INSTALLATION_REQUIRED",
+    });
   }
 
-  res.setHeader("Set-Cookie", responseCookies);
+  res.setHeader("Set-Cookie", [
+    cookie("pilot_vercel_access_token", data.access_token, 60 * 60 * 24 * 30),
+    cookie("pilot_vercel_team_id", teamId, 60 * 60 * 24 * 30),
+    cookie("pilot_vercel_configuration_id", configurationId, 60 * 60 * 24 * 30),
+    cookie("pilot_vercel_oauth_state", "", 0),
+    cookie("pilot_vercel_return_to", "", 0),
+  ]);
+
   const safeReturnTo =
     returnTo.startsWith("/") && !returnTo.startsWith("//")
       ? returnTo
       : "/provision-project.html";
 
+  if (next && next.startsWith("https://vercel.com/")) {
+    return res.redirect(302, next);
+  }
   return res.redirect(302, safeReturnTo);
 };
