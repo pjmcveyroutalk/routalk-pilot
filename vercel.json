@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/provision-project",
+      "destination": "/api/provision-project-page"
+    },
+    {
+      "source": "/provision-project.html",
+      "destination": "/api/provision-project-page"
+    }
+  ]
+}
