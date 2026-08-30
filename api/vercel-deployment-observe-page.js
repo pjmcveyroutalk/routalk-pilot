@@ -15,14 +15,13 @@ label{display:block;margin:12px 0 5px;font-weight:700}input,button{width:100%;bo
 input{background:#07101b;color:#fff;border:1px solid #385979}button{margin-top:16px;border:0;font-weight:900}
 pre{white-space:pre-wrap;word-break:break-word;background:#07101b;padding:13px;border-radius:11px}
 </style><main><h1>Deployment observation</h1>
-<p>Read-only. Finds the exact Vercel production deployment for a merged Git SHA.</p>
+<p>Read-only. Observes the exact known Vercel deployment directly.</p>
 <label>Pilot trigger secret</label><input id="secret" type="password">
-<label>Vercel project</label><input id="project" value="pilot-fresh-project-test">
-<label>Merged revision</label><input id="revision" placeholder="40-character Git SHA">
+<label>Deployment ID</label><input id="deployment" value="Hbi3EfvxEVpBPVqs4R7BdVDH4ajx" readonly>
 <button id="run">Observe deployment</button><pre id="out">Ready.</pre>
 <script>
 run.onclick=async()=>{out.textContent="Observing…";try{
-const q=new URLSearchParams({project_id:project.value.trim(),revision:revision.value.trim()});
+const q=new URLSearchParams({deployment_id:deployment.value.trim()});
 const r=await fetch("/api/vercel-deployment-observe?"+q,{headers:{Authorization:"Bearer "+secret.value}});
 secret.value="";
 const d=await r.json().catch(()=>({error:"Non-JSON response"}));
