@@ -82,7 +82,12 @@ async function github(url, token, options = {}) {
       signal: controller.signal,
     });
     const data = await result.json().catch(() => ({}));
-    return { ok: result.ok, status: result.status, data };
+    return {
+      ok: result.ok,
+      status: result.status,
+      data,
+      acceptedPermissions: result.headers.get("x-accepted-github-permissions"),
+    };
   } catch (error) {
     return { ok: false, status: 0, timedOut: error?.name === "AbortError" };
   } finally {
@@ -136,6 +141,16 @@ async function refreshUntilMergeabilityKnown(baseUrl, prNumber, githubToken) {
   }
 
   return latest;
+}
+
+function isChecksReadUnsupported(result) {
+  if (!result || result.ok || result.status !== 403) return false;
+  const message = String(result.data?.message || "").toLowerCase();
+  const accepted = String(result.acceptedPermissions || "").toLowerCase();
+  return (
+    message.includes("resource not accessible by personal access token") &&
+    accepted.includes("checks=read")
+  );
 }
 
 module.exports = async function handler(request, response) {
@@ -264,10 +279,14 @@ module.exports = async function handler(request, response) {
       github(`${baseUrl}/commits/${expectedHeadSha}/status`, githubToken),
     ]);
 
-    if (!checkRuns.ok) return { upstream: ["check_runs", checkRuns] };
+    const checksUnavailable = isChecksReadUnsupported(checkRuns);
+
+    if (!checkRuns.ok && !checksUnavailable) {
+      return { upstream: ["check_runs", checkRuns] };
+    }
     if (!statuses.ok) return { upstream: ["commit_status", statuses] };
 
-    const checkRunList = checkRuns.data.check_runs || [];
+    const checkRunList = checksUnavailable ? [] : (checkRuns.data.check_runs || []);
     const failingCheckRuns = checkRunList.filter(
       (check) =>
         check.status === "completed" &&
@@ -309,6 +328,7 @@ module.exports = async function handler(request, response) {
         meaningfulPendingCheckRuns.length > 0 ||
         pendingCommitStatuses.length > 0,
       diagnostics: {
+        checks_api_unavailable: checksUnavailable,
         failing_check_runs: failingCheckRuns.map((check) => ({
           name: String(check.name || ""),
           app: String(check.app?.slug || check.app?.name || ""),
@@ -514,6 +534,7 @@ module.exports = async function handler(request, response) {
 
 module.exports._test = {
   allowedTargetRepositories,
+  isChecksReadUnsupported,
   validRepository,
   validRepositoryPart,
 };
