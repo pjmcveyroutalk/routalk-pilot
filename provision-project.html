@@ -25,6 +25,7 @@ button:disabled{cursor:not-allowed;opacity:.55}
 #status[data-state="error"]{color:#ff9a9a}
 .result-link{display:grid;place-items:center;padding:12px 14px;border:1px solid #385779;background:transparent;color:#6fe7d2;text-align:center;text-decoration:none}
 .helper{margin:8px 0 0;color:#8296b0;font-size:.78rem;line-height:1.45}
+[hidden]{display:none!important}
 </style>
 </head>
 <body>
@@ -34,9 +35,11 @@ button:disabled{cursor:not-allowed;opacity:.55}
 <p class="description">Create and link the Vercel deployment project for a registered Pilot repository. This does not bypass Pilot's verifier or merge gates.</p>
 
 <form id="form">
+<div id="auth-entry" hidden>
 <label for="secret">Pilot trigger secret</label>
-<input id="secret" type="password" autocomplete="current-password" required />
-<p class="helper">Your secret is used only for this request and is not saved.</p>
+<input id="secret" type="password" autocomplete="current-password" />
+<p class="helper">Enter it once only if this device is not already unlocked.</p>
+</div>
 
 <label for="repository">Repository</label>
 <input id="repository" type="text" autocomplete="off" placeholder="owner/project" required />
@@ -54,26 +57,100 @@ button:disabled{cursor:not-allowed;opacity:.55}
 </main>
 
 <script>
+const DEVICE_SESSION_KEY = "pilot:device-session.v1";
 const form = document.querySelector("#form");
+const authEntry = document.querySelector("#auth-entry");
 const secret = document.querySelector("#secret");
 const repository = document.querySelector("#repository");
 const approval = document.querySelector("#approval");
 const button = document.querySelector("#button");
 const status = document.querySelector("#status");
 const result = document.querySelector("#result");
+let sessionAuthenticated = false;
 
 const initialRepository = new URLSearchParams(location.search).get("repository");
 if (initialRepository) repository.value = initialRepository;
 
-function refreshButton() {
-  button.disabled = !approval.checked || !repository.value.trim() || !secret.value;
+function safeStorageGet(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
 }
+function safeStorageSet(key, value) {
+  try { localStorage.setItem(key, value); } catch {}
+}
+function safeStorageRemove(key) {
+  try { localStorage.removeItem(key); } catch {}
+}
+function readDeviceSession() {
+  return safeStorageGet(DEVICE_SESSION_KEY) || "";
+}
+function deviceSessionHeaders(extra = {}) {
+  const token = readDeviceSession();
+  return token ? { ...extra, "X-Pilot-Device-Session": token } : { ...extra };
+}
+function setSessionState(authenticated) {
+  sessionAuthenticated = authenticated === true;
+  authEntry.hidden = sessionAuthenticated;
+  if (!sessionAuthenticated) secret.value = "";
+  refreshButton();
+}
+async function readSessionState() {
+  try {
+    const response = await fetch("/api/session", {
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: deviceSessionHeaders(),
+    });
+    const data = await response.json().catch(() => ({}));
+    const authenticated = response.ok && data.authenticated === true;
+    if (!authenticated && response.status === 401) safeStorageRemove(DEVICE_SESSION_KEY);
+    setSessionState(authenticated);
+  } catch {
+    setSessionState(false);
+  }
+  return sessionAuthenticated;
+}
+async function ensureSession() {
+  if (sessionAuthenticated) return true;
+  if (readDeviceSession() && await readSessionState()) return true;
 
+  const pilotSecret = secret.value;
+  if (!pilotSecret) {
+    authEntry.hidden = false;
+    showStatus("Pilot is locked on this device. Enter the trigger secret once.", "error");
+    return false;
+  }
+
+  const response = await fetch("/api/session", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { Authorization: `Bearer ${pilotSecret}` },
+  });
+  const data = await response.json().catch(() => ({}));
+  secret.value = "";
+  if (!response.ok || data.authenticated !== true || typeof data.device_session !== "string") {
+    safeStorageRemove(DEVICE_SESSION_KEY);
+    setSessionState(false);
+    throw new Error(data.error || "Pilot could not unlock this device.");
+  }
+  safeStorageSet(DEVICE_SESSION_KEY, data.device_session);
+  setSessionState(true);
+  return true;
+}
+function handleAuthFailure(response) {
+  if (response.status !== 401) return false;
+  safeStorageRemove(DEVICE_SESSION_KEY);
+  setSessionState(false);
+  showStatus("Pilot is locked. Enter the trigger secret once and retry.", "error");
+  return true;
+}
+function refreshButton() {
+  button.disabled = !approval.checked || !repository.value.trim() || (!sessionAuthenticated && !secret.value);
+}
 function showStatus(message, state = "") {
   status.textContent = message;
   status.dataset.state = state;
 }
-
 function addResultLink(label, href) {
   const link = document.createElement("a");
   link.className = "result-link";
@@ -93,7 +170,6 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!approval.checked) return;
 
-  const pilotSecret = secret.value;
   const repo = repository.value.trim();
 
   button.disabled = true;
@@ -101,21 +177,20 @@ form.addEventListener("submit", async (event) => {
   showStatus(`Provisioning deployment project for ${repo}…`);
 
   try {
-    const response = await fetch("/api/provision-vercel-project", {
+    if (!(await ensureSession())) return;
+
+    const response = await fetch("/api/session?action=provision-vercel-project", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${pilotSecret}`,
-        "Content-Type": "application/json",
-      },
+      credentials: "same-origin",
+      headers: deviceSessionHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ repository: repo }),
     });
-
-    secret.value = "";
     const data = await response.json().catch(() => ({}));
+    if (handleAuthFailure(response))
+      throw new Error("Pilot session expired. Unlock this device and retry.");
 
-    if (!response.ok) {
+    if (!response.ok)
       throw new Error(data.error || `Deployment provisioning failed (${response.status}).`);
-    }
 
     showStatus(
       data.already_exists
@@ -130,14 +205,16 @@ form.addEventListener("submit", async (event) => {
 
     approval.checked = false;
   } catch (error) {
-    secret.value = "";
     showStatus(error.message || "Deployment provisioning failed.", "error");
   } finally {
     refreshButton();
   }
 });
 
-refreshButton();
+readSessionState().then(() => {
+  if (!sessionAuthenticated) authEntry.hidden = false;
+  refreshButton();
+});
 </script>
 </body>
 </html>
