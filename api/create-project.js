@@ -182,8 +182,20 @@ function renderProjects(projects) {
   return lines.join("\n");
 }
 
-function buildRegistrationPackage(repository, requestId) {
+function gitBlobSha(content) {
+  const body = Buffer.from(content);
+  return crypto
+    .createHash("sha1")
+    .update(`blob ${body.length}\0`)
+    .update(body)
+    .digest("hex");
+}
+
+function buildRegistrationPackage(repository, requestId, expectedBlobSha) {
   if (PROJECTS[repository]) return null;
+  if (!/^[0-9a-f]{40}$/.test(expectedBlobSha || "")) {
+    throw new Error("Current Pilot project-registry baseline is unavailable.");
+  }
 
   const projects = {
     ...PROJECTS,
@@ -210,8 +222,28 @@ function buildRegistrationPackage(repository, requestId) {
       {
         path: "config/projects.js",
         content_b64: Buffer.from(renderProjects(projects)).toString("base64"),
+        expected_blob_sha: expectedBlobSha,
       },
     ],
+    change_scope: {
+      requested_change: `Register ${repository} as a Pilot target.`,
+      preserve: [
+        "All existing project registrations and production verifier settings",
+        "Pilot control-repository role and project-registry format",
+        "Existing queue, merge, deployment, and production-verification authorities",
+      ],
+      allowed_variation: [
+        `Add ${repository} with role target; deployment verification remains separately provisioned`,
+      ],
+      touched_paths: ["config/projects.js"],
+    },
+    approval: {
+      basis: "direct_request",
+      reference: `Project creation approved; registration generated for ${repository}.`.slice(
+        0,
+        240,
+      ),
+    },
     commit_message: `Register ${repository} as a Pilot target`,
     pr_title: `Onboarding: register ${projectName}`,
     pr_body:
@@ -299,6 +331,29 @@ module.exports = async function handler(request, response) {
     });
   }
 
+  const registry = await github(
+    `/repos/${CONTROL_REPOSITORY}/contents/config/projects.js?ref=main`,
+    githubToken,
+  );
+  const registrySha = String(registry.data?.sha || "");
+  if (!registry.ok || !/^[0-9a-f]{40}$/.test(registrySha)) {
+    return send(response, registry.timedOut ? 504 : 502, requestId, {
+      error:
+        "Pilot could not verify the current project registry before creating a repository.",
+      code: "PROJECT_REGISTRY_BASELINE_UNAVAILABLE",
+      github_status: registry.status || null,
+    });
+  }
+
+  const deployedRegistrySha = gitBlobSha(renderProjects(PROJECTS));
+  if (deployedRegistrySha !== registrySha) {
+    return send(response, 409, requestId, {
+      error:
+        "Pilot's deployed project registry is behind GitHub main. Retry after the current Pilot deployment is complete.",
+      code: "PROJECT_REGISTRY_DEPLOYMENT_STALE",
+    });
+  }
+
   const created = await github("/user/repos", githubToken, {
     method: "POST",
     body: JSON.stringify({
@@ -333,7 +388,11 @@ module.exports = async function handler(request, response) {
   const htmlUrl = String(
     created.data?.html_url || `https://github.com/${fullName}`,
   );
-  const registrationPackage = buildRegistrationPackage(fullName, requestId);
+  const registrationPackage = buildRegistrationPackage(
+    fullName,
+    requestId,
+    registrySha,
+  );
 
   return send(response, 201, requestId, {
     created: true,
@@ -353,6 +412,7 @@ module.exports = async function handler(request, response) {
 module.exports._test = {
   buildRegistrationPackage,
   classifyCreateFailure,
+  gitBlobSha,
   normalizeDescription,
   renderProjects,
   validProjectName,
