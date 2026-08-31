@@ -34,7 +34,7 @@ button:disabled{cursor:not-allowed;opacity:.55}
 <main>
 <p class="eyebrow">Routalk Pilot</p>
 <h1>Create project</h1>
-<p class="description">Create a new private GitHub repository without leaving Pilot. Pilot initializes the repository and prepares its registration for review so onboarding can continue.</p>
+<p class="description">Create a new private GitHub repository without leaving Pilot. Pilot initializes it and carries you directly into registration review.</p>
 
 <form id="create-form">
 <div id="auth-entry" hidden>
@@ -201,17 +201,24 @@ form.addEventListener("submit", async (event) => {
     if (handleAuthFailure(response)) throw new Error("Pilot session expired. Unlock this device and retry.");
     if (!response.ok) throw new Error(data.error || `Project creation failed (${response.status}).`);
 
-    let registrationStaged = false;
-    if (data.registration_package) registrationStaged = saveRegistrationPackage(data.registration_package);
+    const registrationStaged = data.registration_package
+      ? saveRegistrationPackage(data.registration_package)
+      : false;
+
+    if (registrationStaged) {
+      showStatus(
+        `Created ${data.repository}.\nOpening the registration review now…`,
+        "success",
+      );
+      window.location.assign("/");
+      return;
+    }
 
     showStatus(
-      registrationStaged
-        ? `Created ${data.repository}.\nThe repository is private and initialized. Pilot prepared its registration package for your review.`
-        : `Created ${data.repository}.\nThe repository is private and initialized. Pilot can continue onboarding.`,
+      `Created ${data.repository}.\nPilot could not stage registration automatically. Continue in Pilot before provisioning deployment.`,
       "success",
     );
-    if (registrationStaged) addResultLink("Review project registration in Pilot", "/");
-    if (data.repository) addResultLink("Provision deployment project", `/provision-project.html?repository=${encodeURIComponent(data.repository)}`);
+    addResultLink("Continue in Pilot", "/");
     if (data.url) addResultLink("Open created repository", data.url, true);
     approval.checked = false;
   } catch (error) {
