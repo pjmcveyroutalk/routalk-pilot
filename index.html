@@ -165,11 +165,12 @@ button:disabled { cursor:wait; opacity:.65}
 </form>
 <p id="status" role="status" aria-live="polite"></p>
 <div id="results" aria-label="Pilot results"></div>
-<p class="privacy">Pilot can remember this device with a secure browser session. The trigger secret is never stored by this page.</p>
+<p class="privacy">Pilot remembers this device with a signed, expiring device session. The trigger secret is never stored by this page.</p>
 </main>
 <script>
 const CONTROL_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
 const LAST_COMMAND_KEY = "pilot:last-command-id";
+const DEVICE_SESSION_KEY = "pilot:device-session.v1";
 const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v3";
 const PENDING_MAX_AGE_MS = 30 * 60 * 1000;
 const MERGE_RETRY_DELAYS_MS = [1500, 2500, 4000, 6000, 8000];
@@ -200,15 +201,28 @@ function setSessionState(authenticated) {
   lockButton.hidden = !sessionAuthenticated;
   if (!sessionAuthenticated) secretInput.value = "";
 }
+function readDeviceSession() {
+  return safeStorageGet(DEVICE_SESSION_KEY) || "";
+}
+function deviceSessionHeaders(extra = {}) {
+  const token = readDeviceSession();
+  return token ? { ...extra, "X-Pilot-Device-Session": token } : { ...extra };
+}
+function clearDeviceSession() {
+  safeStorageRemove(DEVICE_SESSION_KEY);
+}
 async function readSessionState() {
   try {
     const response = await fetch("/api/session", {
       method: "GET",
       credentials: "same-origin",
-      cache: "no-store"
+      cache: "no-store",
+      headers: deviceSessionHeaders()
     });
     const result = await response.json().catch(() => ({}));
-    setSessionState(response.ok && result.authenticated === true);
+    const authenticated = response.ok && result.authenticated === true;
+    if (!authenticated && response.status === 401) clearDeviceSession();
+    setSessionState(authenticated);
   } catch {
     setSessionState(false);
   }
@@ -216,6 +230,11 @@ async function readSessionState() {
 }
 async function ensureSession() {
   if (sessionAuthenticated) return true;
+
+  if (readDeviceSession()) {
+    if (await readSessionState()) return true;
+    clearDeviceSession();
+  }
 
   const secret = secretInput.value;
   if (!secret) {
@@ -230,16 +249,19 @@ async function ensureSession() {
   });
   const result = await response.json().catch(() => ({}));
   secretInput.value = "";
-  if (!response.ok || result.authenticated !== true) {
+  if (!response.ok || result.authenticated !== true || typeof result.device_session !== "string") {
+    clearDeviceSession();
     setSessionState(false);
-    throw new Error(result.error || "Pilot could not start a secure session.");
+    throw new Error(result.error || "Pilot could not start a secure device session.");
   }
 
+  safeStorageSet(DEVICE_SESSION_KEY, result.device_session);
   setSessionState(true);
   return true;
 }
 function handleAuthFailure(response) {
   if (response.status !== 401) return false;
+  clearDeviceSession();
   setSessionState(false);
   showStatus("Pilot is locked. Enter the trigger secret once to unlock this device.", "error");
   return true;
@@ -406,7 +428,7 @@ async function requestApprovedMerge(pull, button) {
     const response = await fetch("/api/session?action=merge", {
       method: "POST",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: deviceSessionHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ pr_number: pull.number, repository })
     });
     const result = await response.json().catch(() => ({}));
@@ -466,7 +488,7 @@ async function monitorCommand(commandId, visibilityAttempts = 4) {
   while (Date.now() < deadline) {
     const response = await fetch(
       `/api/session?action=command&command_id=${encodeURIComponent(commandId)}`,
-      { credentials: "same-origin", cache: "no-store" }
+      { credentials: "same-origin", cache: "no-store", headers: deviceSessionHeaders() }
     );
     const result = await response.json().catch(() => ({}));
     if (handleAuthFailure(response)) return;
@@ -564,7 +586,7 @@ packageSubmitButton.addEventListener("click", async () => {
     const response = await fetch("/api/session?action=queue", {
       method: "POST",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: deviceSessionHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(approvedPackage)
     });
     const result = await response.json().catch(() => ({}));
@@ -606,6 +628,7 @@ lockButton.addEventListener("click", async () => {
       credentials: "same-origin"
     });
   } finally {
+    clearDeviceSession();
     setSessionState(false);
     showStatus("Pilot is locked on this device.");
   }
