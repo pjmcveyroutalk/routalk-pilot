@@ -161,11 +161,28 @@ function createPullRequest(command, repository, cwd) {
 
   console.log(`[OK] ${command.command_id}: pull request created in ${repository}`);
 }
+function observedBlobSha(path, cwd) {
+  const result = run(["git","rev-parse",`HEAD:${path}`],{cwd,allowFailure:true});
+  return result.status === 0 ? String(result.stdout || "").trim().toLowerCase() : "";
+}
+function verifyApplyBaselines(command, cwd) {
+  for (const file of command.files) {
+    const observed = observedBlobSha(file.path, cwd);
+    if (file.expected_absent) {
+      if (observed) terminalFail(`Apply target appeared after approval: ${file.path}`);
+      continue;
+    }
+    if (!observed) terminalFail(`Apply target disappeared after approval: ${file.path}`);
+    if (observed !== file.expected_blob_sha)
+      terminalFail(`Apply target changed since approval: ${file.path}`);
+  }
+}
 function processApply(command) {
   const prepared = prepareCommandBranch(command);
   if (!prepared) return;
   const { repository, cwd } = prepared;
   try {
+    verifyApplyBaselines(command, cwd);
     const writtenPaths = [];
     for (const file of command.files) {
       const path = file.path.replaceAll("\\","/");
@@ -234,9 +251,9 @@ function markTerminalFailure(commandId, message) {
 }
 
 function currentBlobSha(path, cwd) {
-  const result = run(["git","rev-parse",`HEAD:${path}`],{cwd,allowFailure:true});
-  if (result.status !== 0) fail(`Deletion target does not exist on main: ${path}`);
-  return String(result.stdout || "").trim().toLowerCase();
+  const observed = observedBlobSha(path, cwd);
+  if (!observed) fail(`Deletion target does not exist on main: ${path}`);
+  return observed;
 }
 function processDelete(command) {
   const prepared = prepareCommandBranch(command);
