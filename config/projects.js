@@ -46,5 +46,9 @@ module.exports = Object.freeze({
   }),
   "pjmcveyroutalk/pilot-customer-zero-02": Object.freeze({
     role: "target",
+    production_verifier: Object.freeze({
+      url: "https://pilot-customer-zero-02.vercel.app/api/pilot-verify-production",
+      auth: "vercel_oidc",
+    }),
   }),
 });
