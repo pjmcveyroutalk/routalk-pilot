@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#09111f" />
+<title>Routalk Pilot</title>
+</head>
+<body>
+<script>
+(async () => {
+  const ACTIVE_PROJECT_KEY = "pilot:active-project.v1";
+  const params = new URLSearchParams(location.search);
+
+  function validRepository(value) {
+    return typeof value === "string" &&
+      /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(value);
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+  }
+
+  let projects = [];
+  try {
+    const response = await fetch("/api/provider-status", {
+      credentials: "same-origin",
+      cache: "no-store"
+    });
+    const result = await response.json();
+    if (!response.ok || !Array.isArray(result.projects)) {
+      throw new Error(result.error || "Project registry unavailable.");
+    }
+    projects = result.projects.filter(
+      item => item && validRepository(item.repository)
+    );
+  } catch (error) {
+    document.body.innerHTML =
+      '<main style="max-width:440px;margin:48px auto;padding:24px;color:#fff;font-family:system-ui">' +
+      '<h1>Routalk Pilot</h1><p>Project registry could not be loaded.</p>' +
+      '<p style="color:#ff9a9a">' + escapeHtml(error.message) + '</p></main>';
+    document.body.style.background = "#09111f";
+    return;
+  }
+
+  const repositories = new Set(projects.map(item => item.repository));
+  let selected = params.get("repository") || "";
+  if (!repositories.has(selected)) {
+    try { selected = localStorage.getItem(ACTIVE_PROJECT_KEY) || ""; } catch {}
+  }
+  if (!repositories.has(selected)) {
+    selected =
+      projects.find(item => item.role === "target")?.repository ||
+      projects[0]?.repository ||
+      "";
+  }
+  if (selected) {
+    try { localStorage.setItem(ACTIVE_PROJECT_KEY, selected); } catch {}
+  }
+
+  const indexResponse = await fetch("/index.html", {
+    credentials: "same-origin",
+    cache: "no-store"
+  });
+  if (!indexResponse.ok) throw new Error("Pilot workspace could not be loaded.");
+  let html = await indexResponse.text();
+
+  const selectorCss = `
+.project-context {
+  margin:0 0 18px;
+  padding:14px;
+  border:1px solid #294467;
+  border-radius:14px;
+  background:#07101d
+}
+.project-context label {
+  margin:0 0 7px;
+  color:#8296b0;
+  font-size:.72rem;
+  letter-spacing:.08em;
+  text-transform:uppercase
+}
+.project-context select {
+  width:100%;
+  min-height:48px;
+  padding:10px 38px 10px 12px;
+  border:1px solid #385779;
+  border-radius:12px;
+  background:#0a1626;
+  color:#f4f7fb;
+  font:inherit;
+  font-weight:800
+}
+.project-context select:focus {
+  outline:3px solid rgba(111,231,210,.24);
+  border-color:#6fe7d2
+}
+.project-context .active-project-note {
+  margin:8px 0 0;
+  color:#8296b0;
+  font-size:.75rem;
+  line-height:1.4
+}`;
+
+  const options = projects.map(project => {
+    const repo = project.repository;
+    const name = repo.split("/")[1] || repo;
+    const suffix = project.role === "control" ? " (Pilot)" : "";
+    return `<option value="${escapeHtml(repo)}"${repo === selected ? " selected" : ""}>${escapeHtml(name + suffix)}</option>`;
+  }).join("");
+
+  const selectorHtml = `
+<section class="project-context" aria-label="Active project">
+  <label for="active-project">Active project</label>
+  <select id="active-project">${options}</select>
+  <p class="active-project-note">Pilot keeps this project selected on this device. Protected actions still show the exact repository before approval.</p>
+</section>`;
+
+  html = html.replace("</style>", selectorCss + "\n</style>");
+  html = html.replace(
+    '<section class="workspace-intro" aria-label="Workspace">',
+    selectorHtml + '\n<section class="workspace-intro" aria-label="Workspace">'
+  );
+
+  const safeSelected = JSON.stringify(selected);
+  html = html.replace(
+    'const LAST_COMMAND_KEY = "pilot:last-command-id";',
+    `const ACTIVE_PROJECT = ${safeSelected};\nconst LAST_COMMAND_KEY = "pilot:last-command-id:" + ACTIVE_PROJECT;`
+  );
+  html = html.replace(
+    'const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v3";',
+    'const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v3:" + ACTIVE_PROJECT;'
+  );
+
+  const contextScript = `
+<script>
+(() => {
+  const ACTIVE_PROJECT_KEY = "pilot:active-project.v1";
+  const selector = document.querySelector("#active-project");
+  const packageInput = document.querySelector("#package-file");
+  if (!selector) return;
+
+  selector.addEventListener("change", () => {
+    try { localStorage.setItem(ACTIVE_PROJECT_KEY, selector.value); } catch {}
+    const next = new URL(location.href);
+    next.searchParams.set("repository", selector.value);
+    location.assign(next.pathname + next.search);
+  });
+
+  if (packageInput) {
+    packageInput.addEventListener("change", async () => {
+      const file = packageInput.files && packageInput.files[0];
+      if (!file) return;
+      try {
+        const value = JSON.parse(await file.text());
+        const effectiveRepository =
+          typeof value.repository === "string" && value.repository
+            ? value.repository
+            : "pjmcveyroutalk/routalk-pilot";
+        if (effectiveRepository !== selector.value) {
+          packageInput.value = "";
+          const status = document.querySelector("#status");
+          if (status) {
+            status.textContent =
+              "This package targets " + effectiveRepository +
+              ", but the active project is " + selector.value +
+              ". Switch projects before importing it.";
+            status.dataset.state = "error";
+          }
+        }
+      } catch {
+        // Existing Pilot package validation remains authoritative.
+      }
+    }, true);
+  }
+})();
+<\/script>`;
+
+  html = html.replace("</body>", contextScript + "\n</body>");
+  document.open();
+  document.write(html);
+  document.close();
+})().catch(error => {
+  document.body.innerHTML =
+    '<main style="max-width:440px;margin:48px auto;padding:24px;color:#fff;font-family:system-ui">' +
+    '<h1>Routalk Pilot</h1><p style="color:#ff9a9a">' +
+    String(error && error.message || error) + '</p></main>';
+  document.body.style.background = "#09111f";
+});
+</script>
+</body>
+</html>
