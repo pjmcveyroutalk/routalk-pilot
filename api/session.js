@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const queueHandler = require("./queue");
 const commandHandler = require("./command");
 const mergeHandler = require("./merge");
+const createProjectHandler = require("./create-project");
 const {
   clearSessionCookie,
   createSessionToken,
@@ -49,6 +50,7 @@ async function delegateAuthenticated(request, response, triggerSecret, action) {
   if (action === "queue" && request.method === "POST") return queueHandler(request, response);
   if (action === "command" && request.method === "GET") return commandHandler(request, response);
   if (action === "merge" && request.method === "POST") return mergeHandler(request, response);
+  if (action === "create-project" && request.method === "POST") return createProjectHandler(request, response);
 
   response.setHeader("Allow", action === "command" ? "GET" : "POST");
   return send(response, 405, crypto.randomUUID(), { error: "Method not allowed" });
@@ -64,7 +66,7 @@ module.exports = async function handler(request, response) {
 
   const action = requestedAction(request);
   if (action) {
-    if (!["queue", "command", "merge"].includes(action))
+    if (!["queue", "command", "merge", "create-project"].includes(action))
       return send(response, 400, requestId, { error: "Invalid session action" });
     return delegateAuthenticated(request, response, triggerSecret, action);
   }
