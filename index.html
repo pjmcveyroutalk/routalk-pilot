@@ -181,45 +181,6 @@ button:disabled { cursor:wait; opacity:.65}
   background:transparent;
   color:#b8c7db;
   font-size:.78rem}
-.conversation {
-  margin:0 0 18px;
-  padding:14px;
-  border:1px solid #294467;
-  border-radius:14px;
-  background:#07101d}
-.conversation h2 { margin:2px 0 10px; font-size:1.08rem}
-.conversation .workspace-label {
-  margin:0 0 4px;
-  color:#6fe7d2;
-  font-size:.7rem;
-  font-weight:800;
-  letter-spacing:.1em;
-  text-transform:uppercase}
-textarea {
-  width:100%;
-  min-height:104px;
-  padding:12px 14px;
-  border:1px solid #385779;
-  border-radius:12px;
-  resize:vertical;
-  background:#07101d;
-  color:#fff;
-  font:inherit}
-textarea:focus {
-  outline:3px solid rgba(111, 231, 210, .24);
-  border-color:#6fe7d2}
-.intelligence-output {
-  min-height:58px;
-  margin:0 0 12px;
-  padding:12px 14px;
-  border:1px solid #294467;
-  border-radius:12px;
-  color:#b8c7db;
-  font-size:.88rem;
-  line-height:1.5;
-  white-space:pre-wrap}
-.intelligence-output[data-state="success"] { color:#f4f7fb}
-.intelligence-output[data-state="error"] { color:#ff9a9a}
 </style>
 </head>
 <body>
@@ -227,15 +188,6 @@ textarea:focus {
 <p class="eyebrow">Mobile development bridge</p>
 <h1>Routalk Pilot</h1>
 <p class="description">Your mobile workspace for reviewing, approving, and shipping changes.</p>
-<section class="conversation" aria-label="Pilot intelligence">
-<p class="workspace-label">Pilot intelligence</p>
-<h2>Talk through a change</h2>
-<div id="intelligence-output" class="intelligence-output" role="status" aria-live="polite">Describe what you want to work on. Pilot will reason with you here before anything is built or deployed.</div>
-<label for="intelligence-input">What do you want to work on?</label>
-<textarea id="intelligence-input" maxlength="12000" placeholder="Describe the change, problem, or idea."></textarea>
-<button id="intelligence-send" type="button">Ask Pilot</button>
-<p class="helper">Planning only. Nothing is changed, merged, or deployed from this conversation.</p>
-</section>
 <section class="workspace-intro" aria-label="Workspace">
 <p class="workspace-label">Workspace</p>
 <h2>Ship a change</h2>
@@ -283,9 +235,6 @@ const recent = document.querySelector("#recent");
 const resumeLastButton = document.querySelector("#resume-last-button");
 const status = document.querySelector("#status");
 const results = document.querySelector("#results");
-const intelligenceInput = document.querySelector("#intelligence-input");
-const intelligenceSend = document.querySelector("#intelligence-send");
-const intelligenceOutput = document.querySelector("#intelligence-output");
 let approvedPackage = null;
 let sessionAuthenticated = false;
 
@@ -710,52 +659,6 @@ packageSubmitButton.addEventListener("click", async () => {
     packageSubmitButton.textContent = "Submit approved package";
   }
 });
-intelligenceSend.addEventListener("click", async () => {
-  const message = intelligenceInput.value.trim();
-  if (!message) {
-    intelligenceOutput.textContent = "Describe what you want Pilot to help you think through.";
-    intelligenceOutput.dataset.state = "error";
-    return;
-  }
-
-  intelligenceSend.disabled = true;
-  intelligenceSend.textContent = "Thinking…";
-  intelligenceOutput.textContent = "Pilot is thinking…";
-  intelligenceOutput.dataset.state = "";
-
-  try {
-    if (!(await ensureSession())) {
-      intelligenceOutput.textContent = "Unlock Pilot on this device, then ask again.";
-      intelligenceOutput.dataset.state = "error";
-      return;
-    }
-
-    const response = await fetch("/api/session?action=intelligence", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: deviceSessionHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ message })
-    });
-    const result = await response.json().catch(() => ({}));
-    if (handleAuthFailure(response)) {
-      intelligenceOutput.textContent = "Pilot is locked. Unlock this device, then ask again.";
-      intelligenceOutput.dataset.state = "error";
-      return;
-    }
-    if (!response.ok)
-      throw new Error(result.error || `Pilot intelligence failed (${response.status})`);
-
-    intelligenceOutput.textContent = result.text || "Pilot returned no response.";
-    intelligenceOutput.dataset.state = "success";
-  } catch (error) {
-    intelligenceOutput.textContent = error.message || "Pilot intelligence is unavailable right now.";
-    intelligenceOutput.dataset.state = "error";
-  } finally {
-    intelligenceSend.disabled = false;
-    intelligenceSend.textContent = "Ask Pilot";
-  }
-});
-
 resumeLastButton.addEventListener("click", async () => {
   const commandId = readLastCommand();
   if (!commandId) return;
