@@ -363,6 +363,31 @@ function validatePackage(value) {
   if (!validateRepository(repository))
     throw new Error("The package repository is invalid.");
 
+  const changeScope = value.change_scope;
+  if (!changeScope || typeof changeScope !== "object" || Array.isArray(changeScope))
+    throw new Error("The package is missing its approved change scope.");
+  if (typeof changeScope.requested_change !== "string" || !changeScope.requested_change ||
+      changeScope.requested_change.length > 1000)
+    throw new Error("The package requested change is invalid.");
+  if (!Array.isArray(changeScope.preserve) || changeScope.preserve.length < 1 ||
+      changeScope.preserve.length > 20 ||
+      changeScope.preserve.some(item => typeof item !== "string" || !item || item.length > 240))
+    throw new Error("The package preserve boundary is invalid.");
+  if (changeScope.allowed_variation != null &&
+      (!Array.isArray(changeScope.allowed_variation) || changeScope.allowed_variation.length > 20 ||
+       changeScope.allowed_variation.some(item => typeof item !== "string" || !item || item.length > 240)))
+    throw new Error("The package allowed variation is invalid.");
+
+  const approval = value.approval;
+  if (!approval || typeof approval !== "object" || Array.isArray(approval) ||
+      !["direct_request", "approved_proposal"].includes(approval.basis))
+    throw new Error("The package approval basis is invalid.");
+  if (approval.reference != null &&
+      (typeof approval.reference !== "string" || approval.reference.length > 240))
+    throw new Error("The package approval reference is invalid.");
+  if (approval.basis === "approved_proposal" && !approval.reference)
+    throw new Error("The approved proposal reference is required.");
+
   const paths = new Set();
   let totalBytes = 0;
   if (value.action === "apply") {
@@ -376,6 +401,10 @@ function validatePackage(value) {
           lowered === ".git" || lowered.startsWith(".git/") ||
           lowered.startsWith(".github/workflows/") || paths.has(path))
         throw new Error(`Unsafe or duplicate package path: ${path || "(missing)"}`);
+      const hasSha = typeof file.expected_blob_sha === "string" && /^[0-9a-f]{40}$/i.test(file.expected_blob_sha);
+      const expectsAbsent = file.expected_absent === true;
+      if ((hasSha ? 1 : 0) + (expectsAbsent ? 1 : 0) !== 1)
+        throw new Error(`Apply target must declare exactly one baseline expectation: ${path}`);
       paths.add(path);
       const fileBytes = decodedBase64Size(file.content_b64);
       if (fileBytes > 32000) throw new Error(`Package file is too large: ${path}`);
@@ -398,12 +427,28 @@ function validatePackage(value) {
       paths.add(path);
     }
   }
+  const touchedPaths = changeScope.touched_paths;
+  const normalizedTouched = Array.isArray(touchedPaths)
+    ? touchedPaths.map(path => typeof path === "string" ? path.replaceAll("\\", "/") : "")
+    : [];
+  if (normalizedTouched.length !== paths.size ||
+      new Set(normalizedTouched).size !== normalizedTouched.length ||
+      [...paths].some(path => !normalizedTouched.includes(path)))
+    throw new Error("The approved scope does not exactly match the package targets.");
+
   return { command: { ...value, repository }, repository, totalBytes, paths: [...paths] };
 }
 function renderPackageReview(info) {
   packageSummary.replaceChildren();
   const isDelete = info.command.action === "delete";
+  const scope = info.command.change_scope;
+  const approval = info.command.approval;
   const rows = [
+    ["Requested change", scope.requested_change],
+    ["Preserve", scope.preserve.join(" • ")],
+    ["Allowed variation", scope.allowed_variation?.length ? scope.allowed_variation.join(" • ") : "None"],
+    ["Approval", approval.basis === "approved_proposal" ? "Approved proposal" : "Direct request"],
+    ["Approval reference", approval.reference || "(not supplied)"],
     ["Action", info.command.action],
     ["Repository", info.repository],
     ["Command", info.command.command_id],
