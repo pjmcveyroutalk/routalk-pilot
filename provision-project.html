@@ -151,12 +151,14 @@ function showStatus(message, state = "") {
   status.textContent = message;
   status.dataset.state = state;
 }
-function addResultLink(label, href) {
+function addResultLink(label, href, external = false) {
   const link = document.createElement("a");
   link.className = "result-link";
   link.href = href;
-  link.target = "_blank";
-  link.rel = "noopener noreferrer";
+  if (external) {
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+  }
   link.textContent = label;
   result.append(link);
 }
@@ -192,15 +194,20 @@ form.addEventListener("submit", async (event) => {
     if (!response.ok)
       throw new Error(data.error || `Deployment provisioning failed (${response.status}).`);
 
+    const deploymentPending = data.next_action === "WAIT_FOR_PRODUCTION_DEPLOYMENT";
     showStatus(
-      data.already_exists
-        ? `Deployment project already exists for ${repo}.`
-        : `Deployment project created and linked for ${repo}.`,
+      deploymentPending
+        ? `${data.already_exists ? "Deployment project already exists" : "Deployment project created and linked"} for ${repo}.\nNo production deployment is live yet. Ship the first build through Pilot; production will be exposed only after verification passes.`
+        : data.already_exists
+          ? `Deployment project already exists for ${repo}.`
+          : `Deployment project created and linked for ${repo}.`,
       "success",
     );
 
-    if (data.expected_production_url) {
-      addResultLink("Open expected production URL", data.expected_production_url);
+    if (deploymentPending) {
+      addResultLink("Continue in Pilot", "/");
+    } else if (data.expected_production_url) {
+      addResultLink("Open verified production URL", data.expected_production_url, true);
     }
 
     approval.checked = false;
