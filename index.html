@@ -140,6 +140,26 @@ button:disabled { cursor:wait; opacity:.65}
   margin-top:10px;
   padding:7px 10px;
   font-size:.78rem}
+.recent {
+  margin-top:14px;
+  padding-top:12px;
+  border-top:1px solid #294467}
+.recent summary {
+  width:max-content;
+  max-width:100%;
+  color:#8296b0;
+  font-size:.78rem;
+  font-weight:800;
+  cursor:pointer}
+.recent button {
+  width:auto;
+  min-height:36px;
+  margin-top:10px;
+  padding:7px 10px;
+  border:1px solid #385779;
+  background:transparent;
+  color:#b8c7db;
+  font-size:.78rem}
 </style>
 </head>
 <body>
@@ -157,7 +177,10 @@ button:disabled { cursor:wait; opacity:.65}
 <input id="package-file" type="file" accept="application/json,.json,.pilot" />
 <label class="file-button" for="package-file">Import build package</label>
 <p class="helper">Choose a complete .json or .pilot package, review its scope, then submit it securely.</p>
-<button id="resume-last-button" class="secondary-button" type="button" hidden>Resume last command</button>
+<details id="recent" class="recent" hidden>
+<summary>Recent</summary>
+<button id="resume-last-button" class="secondary-button" type="button">Resume last command</button>
+</details>
 <section id="package-review" class="package-review" aria-live="polite" hidden>
 <h2>Package review</h2><dl id="package-summary"></dl>
 <button id="package-submit-button" type="button">Submit approved package</button>
@@ -182,6 +205,7 @@ const packageFile = document.querySelector("#package-file");
 const packageReview = document.querySelector("#package-review");
 const packageSummary = document.querySelector("#package-summary");
 const packageSubmitButton = document.querySelector("#package-submit-button");
+const recent = document.querySelector("#recent");
 const resumeLastButton = document.querySelector("#resume-last-button");
 const status = document.querySelector("#status");
 const results = document.querySelector("#results");
@@ -287,8 +311,8 @@ function readLastCommand() {
 }
 function refreshResumeButton() {
   const commandId = readLastCommand();
-  resumeLastButton.hidden = !commandId;
-  if (commandId) resumeLastButton.textContent = `Resume last command: ${commandId}`;
+  recent.hidden = !commandId;
+  if (commandId) resumeLastButton.textContent = "Resume last command";
 }
 function decodedBase64Size(value) {
   if (typeof value !== "string" || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value))
@@ -535,7 +559,7 @@ async function monitorCommand(commandId, visibilityAttempts = 4) {
       showStatus("Package queued securely. Waiting for Pilot processing…");
     await wait(3000);
   }
-  showStatus("Pilot is still processing. Use Resume last command to continue checking.", "error");
+  showStatus("Pilot is still processing. Open Recent to continue checking.", "error");
 }
 packageFile.addEventListener("change", async () => {
   const file = packageFile.files?.[0];
