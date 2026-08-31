@@ -125,7 +125,7 @@ button:disabled { cursor:wait; opacity:.65}
   border:1px solid #385779;
   border-radius:14px;
   background:#07101d}
-.package-review[hidden] { display:none}
+.package-review[hidden], #auth-entry[hidden], #lock-button[hidden] { display:none}
 .package-review h2 { margin:0 0 10px; font-size:1rem}
 .package-review dl {
   display:grid;
@@ -135,6 +135,11 @@ button:disabled { cursor:wait; opacity:.65}
   font-size:.8rem}
 .package-review dt { color:#8296b0}
 .package-review dd { margin:0; overflow-wrap:anywhere}
+#lock-button {
+  min-height:36px;
+  margin-top:10px;
+  padding:7px 10px;
+  font-size:.78rem}
 </style>
 </head>
 <body>
@@ -143,9 +148,12 @@ button:disabled { cursor:wait; opacity:.65}
 <h1>Routalk Pilot</h1>
 <p class="description">Send a build package through the encrypted Pilot queue and follow the exact command through approval.</p>
 <form id="dispatch-form">
+<div id="auth-entry">
 <label for="secret">Pilot trigger secret</label>
-<input id="secret" name="secret" type="password" autocomplete="current-password" required />
-<p class="helper">Use the saved Pilot trigger password, not a GitHub token.</p>
+<input id="secret" name="secret" type="password" autocomplete="current-password" />
+<p class="helper">Enter it once on this device to start a secure Pilot session.</p>
+</div>
+<button id="lock-button" class="secondary-button" type="button" hidden>Lock Pilot on this device</button>
 <input id="package-file" type="file" accept="application/json,.json,.pilot" />
 <label class="file-button" for="package-file">Import build package</label>
 <p class="helper">Choose a complete .json or .pilot package, review its scope, then submit it securely.</p>
@@ -157,7 +165,7 @@ button:disabled { cursor:wait; opacity:.65}
 </form>
 <p id="status" role="status" aria-live="polite"></p>
 <div id="results" aria-label="Pilot results"></div>
-<p class="privacy">The secret is used only for the active request and is not saved by this page.</p>
+<p class="privacy">Pilot can remember this device with a secure browser session. The trigger secret is never stored by this page.</p>
 </main>
 <script>
 const CONTROL_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
@@ -166,8 +174,9 @@ const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v3";
 const PENDING_MAX_AGE_MS = 30 * 60 * 1000;
 const MERGE_RETRY_DELAYS_MS = [1500, 2500, 4000, 6000, 8000];
 const ACTIVE_MONITOR_FALLBACK_MS = 120000;
-const ACTIVE_MONITOR_SESSION_BUFFER_MS = 15000;
 const secretInput = document.querySelector("#secret");
+const authEntry = document.querySelector("#auth-entry");
+const lockButton = document.querySelector("#lock-button");
 const packageFile = document.querySelector("#package-file");
 const packageReview = document.querySelector("#package-review");
 const packageSummary = document.querySelector("#package-summary");
@@ -176,6 +185,7 @@ const resumeLastButton = document.querySelector("#resume-last-button");
 const status = document.querySelector("#status");
 const results = document.querySelector("#results");
 let approvedPackage = null;
+let sessionAuthenticated = false;
 
 function showStatus(message, state = "") {
   status.textContent = message;
@@ -183,6 +193,56 @@ function showStatus(message, state = "") {
 }
 function wait(milliseconds) {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+function setSessionState(authenticated) {
+  sessionAuthenticated = authenticated === true;
+  authEntry.hidden = sessionAuthenticated;
+  lockButton.hidden = !sessionAuthenticated;
+  if (!sessionAuthenticated) secretInput.value = "";
+}
+async function readSessionState() {
+  try {
+    const response = await fetch("/api/session", {
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store"
+    });
+    const result = await response.json().catch(() => ({}));
+    setSessionState(response.ok && result.authenticated === true);
+  } catch {
+    setSessionState(false);
+  }
+  return sessionAuthenticated;
+}
+async function ensureSession() {
+  if (sessionAuthenticated) return true;
+
+  const secret = secretInput.value;
+  if (!secret) {
+    showStatus("Enter the Pilot trigger secret once to unlock this device.", "error");
+    return false;
+  }
+
+  const response = await fetch("/api/session", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { Authorization: `Bearer ${secret}` }
+  });
+  const result = await response.json().catch(() => ({}));
+  secretInput.value = "";
+  if (!response.ok || result.authenticated !== true) {
+    setSessionState(false);
+    throw new Error(result.error || "Pilot could not start a secure session.");
+  }
+
+  setSessionState(true);
+  return true;
+}
+function handleAuthFailure(response) {
+  if (response.status !== 401) return false;
+  setSessionState(false);
+  showStatus("Pilot is locked. Enter the trigger secret once to unlock this device.", "error");
+  return true;
 }
 function safeStorageGet(key) {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -340,24 +400,19 @@ function mergeErrorMessage(result, statusCode) {
     details.push(`Status pending: ${i.context || "unnamed status"}`);
   return [result.error || `Merge failed (${statusCode})`, ...details].join("\n");
 }
-async function requestApprovedMerge(pull, secretSession, button) {
+async function requestApprovedMerge(pull, button) {
   const repository = pull.repository || CONTROL_REPOSITORY;
   for (let attempt = 0; attempt <= MERGE_RETRY_DELAYS_MS.length; attempt += 1) {
-    if (!secretSession.value || Date.now() > secretSession.expiresAt) {
-      secretSession.value = "";
-      throw new Error("Merge session expired. Enter the Pilot secret and resume the command.");
-    }
-
-    const response = await fetch("/api/merge", {
+    const response = await fetch("/api/session?action=merge", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${secretSession.value}`,
-        "Content-Type": "application/json"
-      },
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pr_number: pull.number, repository })
     });
     const result = await response.json().catch(() => ({}));
     if (response.ok) return result;
+    if (handleAuthFailure(response))
+      throw new Error("Pilot session expired. Unlock Pilot and resume the command.");
 
     if (result.retryable !== true || attempt >= MERGE_RETRY_DELAYS_MS.length)
       throw new Error(mergeErrorMessage(result, response.status));
@@ -371,7 +426,7 @@ async function requestApprovedMerge(pull, secretSession, button) {
   }
   throw new Error("Pilot could not settle the merge within the automatic retry window.");
 }
-function addMergeButton(pull, secretSession, commandId) {
+function addMergeButton(pull, commandId) {
   const button = document.createElement("button");
   button.className = "merge-button";
   button.type = "button";
@@ -379,9 +434,8 @@ function addMergeButton(pull, secretSession, commandId) {
   let merging = false;
   button.addEventListener("click", async () => {
     if (merging) return;
-    if (!secretSession.value || Date.now() > secretSession.expiresAt) {
-      secretSession.value = "";
-      showStatus("Merge session expired. Enter the Pilot secret and resume the command.", "error");
+    if (!sessionAuthenticated && !(await readSessionState())) {
+      showStatus("Pilot is locked. Enter the trigger secret once and resume the command.", "error");
       return;
     }
     const repository = pull.repository || CONTROL_REPOSITORY;
@@ -393,10 +447,10 @@ function addMergeButton(pull, secretSession, commandId) {
     button.textContent = "Merging…";
     showStatus(`Validating and merging PR #${pull.number}…`);
     try {
-      await requestApprovedMerge(pull, secretSession, button);
+      await requestApprovedMerge(pull, button);
       button.textContent = `PR #${pull.number} merged`;
       showStatus(`PR #${pull.number} merged successfully. Verifying completion…`, "success");
-      await monitorCommand(commandId, secretSession, 2);
+      await monitorCommand(commandId, 2);
     } catch (error) {
       merging = false;
       button.disabled = false;
@@ -406,20 +460,16 @@ function addMergeButton(pull, secretSession, commandId) {
   });
   results.append(button);
 }
-async function monitorCommand(commandId, secretSession, visibilityAttempts = 4) {
-  const fallbackDeadline = Date.now() + ACTIVE_MONITOR_FALLBACK_MS;
-  const sessionDeadline =
-    Number.isFinite(secretSession?.expiresAt)
-      ? secretSession.expiresAt - ACTIVE_MONITOR_SESSION_BUFFER_MS
-      : fallbackDeadline;
-  const deadline = Math.max(fallbackDeadline, sessionDeadline);
+async function monitorCommand(commandId, visibilityAttempts = 4) {
+  const deadline = Date.now() + ACTIVE_MONITOR_FALLBACK_MS;
   let visibilityMisses = 0;
   while (Date.now() < deadline) {
-    const response = await fetch(`/api/command?command_id=${encodeURIComponent(commandId)}`, {
-      headers: { Authorization: `Bearer ${secretSession.value}` },
-      cache: "no-store"
-    });
+    const response = await fetch(
+      `/api/session?action=command&command_id=${encodeURIComponent(commandId)}`,
+      { credentials: "same-origin", cache: "no-store" }
+    );
     const result = await response.json().catch(() => ({}));
+    if (handleAuthFailure(response)) return;
     if (response.status === 404 && visibilityMisses < visibilityAttempts) {
       visibilityMisses += 1;
       showStatus("Package accepted. Waiting for command visibility…");
@@ -433,7 +483,7 @@ async function monitorCommand(commandId, secretSession, visibilityAttempts = 4) 
     const pull = result.pull_request;
     if (pull) {
       addResultLink(`${pull.merged ? "Merged" : "Open"} PR #${pull.number}: ${pull.title}`, pull.html_url);
-      if (!pull.merged) addMergeButton(pull, secretSession, commandId);
+      if (!pull.merged) addMergeButton(pull, commandId);
     }
     if (result.state === "COMPLETED") {
       showStatus("Pilot command completed and production verification passed.", "success");
@@ -463,14 +513,7 @@ async function monitorCommand(commandId, secretSession, visibilityAttempts = 4) 
       showStatus("Package queued securely. Waiting for Pilot processing…");
     await wait(3000);
   }
-  const sessionExpired =
-    !secretSession.value || Date.now() >= secretSession.expiresAt - ACTIVE_MONITOR_SESSION_BUFFER_MS;
-  showStatus(
-    sessionExpired
-      ? "Pilot is still processing. Re-enter the Pilot secret and use Resume last command."
-      : "Pilot is still processing. Use Resume last command to continue checking.",
-    "error"
-  );
+  showStatus("Pilot is still processing. Use Resume last command to continue checking.", "error");
 }
 packageFile.addEventListener("change", async () => {
   const file = packageFile.files?.[0];
@@ -501,33 +544,31 @@ packageFile.addEventListener("change", async () => {
   }
 });
 packageSubmitButton.addEventListener("click", async () => {
-  let secret = secretInput.value;
   if (!approvedPackage) {
     showStatus("Import and review a Pilot package first.", "error");
     return;
   }
-  if (!secret) {
-    showStatus("Enter the Pilot trigger secret.", "error");
-    return;
-  }
+
   setPackageBusy(true);
   packageSubmitButton.textContent = "Encrypting and submitting…";
   results.replaceChildren();
-  showStatus(
-    approvedPackage.action === "delete"
-      ? "Submitting the approved deletion package through the encrypted queue…"
-      : "Submitting the approved package through the encrypted queue…"
-  );
   try {
-    const response = await fetch("/api/queue", {
+    if (!(await ensureSession())) return;
+
+    showStatus(
+      approvedPackage.action === "delete"
+        ? "Submitting the approved deletion package through the encrypted queue…"
+        : "Submitting the approved package through the encrypted queue…"
+    );
+
+    const response = await fetch("/api/session?action=queue", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${secret}`,
-        "Content-Type": "application/json"
-      },
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(approvedPackage)
     });
     const result = await response.json().catch(() => ({}));
+    if (handleAuthFailure(response)) return;
     if (!response.ok)
       throw new Error(result.error || `Package submission failed (${response.status})`);
 
@@ -536,40 +577,43 @@ packageSubmitButton.addEventListener("click", async () => {
     approvedPackage = null;
     packageFile.value = "";
     packageReview.hidden = true;
-    secretInput.value = "";
-    const secretSession = { value: secret, expiresAt: Date.now() + 10 * 60 * 1000 };
-    setTimeout(() => { secretSession.value = ""; }, 10 * 60 * 1000);
     showStatus("Package queued securely. Following this command now…", "success");
     packageSubmitButton.textContent = "Monitoring…";
-    await monitorCommand(result.command_id, secretSession);
+    await monitorCommand(result.command_id);
   } catch (error) {
     showStatus(error.message || "The build package could not be submitted.", "error");
   } finally {
-    secret = "";
     setPackageBusy(false);
     packageSubmitButton.textContent = "Submit approved package";
   }
 });
 resumeLastButton.addEventListener("click", async () => {
   const commandId = readLastCommand();
-  const secret = secretInput.value;
   if (!commandId) return;
-  if (!secret) {
-    showStatus("Enter the Pilot trigger secret to resume the command.", "error");
-    return;
-  }
-  const secretSession = { value: secret, expiresAt: Date.now() + 10 * 60 * 1000 };
-  secretInput.value = "";
   results.replaceChildren();
-  showStatus(`Resuming ${commandId}…`);
   try {
-    await monitorCommand(commandId, secretSession, 2);
+    if (!(await ensureSession())) return;
+    showStatus(`Resuming ${commandId}…`);
+    await monitorCommand(commandId, 2);
   } catch (error) {
     showStatus(error.message || "The command could not be resumed.", "error");
   }
 });
+lockButton.addEventListener("click", async () => {
+  try {
+    await fetch("/api/session", {
+      method: "DELETE",
+      credentials: "same-origin"
+    });
+  } finally {
+    setSessionState(false);
+    showStatus("Pilot is locked on this device.");
+  }
+});
+
 refreshResumeButton();
 restorePendingPackage();
+readSessionState();
 </script>
 </body>
 </html>
