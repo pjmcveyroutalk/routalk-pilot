@@ -1,9 +1,12 @@
 {
-  "rewrites": [
+  "redirects": [
     {
       "source": "/",
-      "destination": "/workspace.html"
-    },
+      "destination": "/workspace.html",
+      "permanent": false
+    }
+  ],
+  "rewrites": [
     {
       "source": "/provision-project",
       "destination": "/api/provision-project-page"
