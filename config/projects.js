@@ -37,6 +37,9 @@ module.exports = Object.freeze({
       auth: "vercel_oidc",
     }),
   }),
+  "pjmcveyroutalk/pilot-customer-zero-03": Object.freeze({
+    role: "target",
+  }),
   "pjmcveyroutalk/pilot-customer-zero-02": Object.freeze({
     role: "target",
     production_verifier: Object.freeze({
