@@ -62,7 +62,9 @@ button:disabled{cursor:not-allowed;opacity:.55}
 </main>
 
 <script>
-const PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v3";
+const CONTROL_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
+const LEGACY_PENDING_PACKAGE_KEY = "routalk-pilot.pending-package.v3";
+const PENDING_PACKAGE_KEY = LEGACY_PENDING_PACKAGE_KEY + ":" + CONTROL_REPOSITORY;
 const DEVICE_SESSION_KEY = "pilot:device-session.v1";
 const form = document.querySelector("#create-form");
 const authEntry = document.querySelector("#auth-entry");
@@ -83,6 +85,21 @@ function safeStorageSet(key, value) {
 }
 function safeStorageRemove(key) {
   try { localStorage.removeItem(key); } catch {}
+}
+function canonicalWorkspaceUrl() {
+  return "/workspace.html?repository=" + encodeURIComponent(CONTROL_REPOSITORY);
+}
+function recoverLegacyPendingRegistration() {
+  try {
+    if (localStorage.getItem(PENDING_PACKAGE_KEY)) return false;
+    const legacy = localStorage.getItem(LEGACY_PENDING_PACKAGE_KEY);
+    if (!legacy) return false;
+    localStorage.setItem(PENDING_PACKAGE_KEY, legacy);
+    localStorage.removeItem(LEGACY_PENDING_PACKAGE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
 }
 function readDeviceSession() {
   return safeStorageGet(DEVICE_SESSION_KEY) || "";
@@ -158,6 +175,7 @@ function showStatus(message, state = "") {
 function saveRegistrationPackage(command) {
   try {
     localStorage.setItem(PENDING_PACKAGE_KEY, JSON.stringify({ saved_at: Date.now(), command }));
+    localStorage.removeItem(LEGACY_PENDING_PACKAGE_KEY);
     return true;
   } catch {
     return false;
@@ -210,7 +228,7 @@ form.addEventListener("submit", async (event) => {
         `Created ${data.repository}.\nOpening the registration review now…`,
         "success",
       );
-      window.location.assign("/");
+      window.location.assign(canonicalWorkspaceUrl());
       return;
     }
 
@@ -218,7 +236,7 @@ form.addEventListener("submit", async (event) => {
       `Created ${data.repository}.\nPilot could not stage registration automatically. Continue in Pilot before provisioning deployment.`,
       "success",
     );
-    addResultLink("Continue in Pilot", "/");
+    addResultLink("Continue in Pilot", canonicalWorkspaceUrl());
     if (data.url) addResultLink("Open created repository", data.url, true);
     approval.checked = false;
   } catch (error) {
@@ -228,10 +246,15 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
-readSessionState().then(() => {
-  if (!sessionAuthenticated) authEntry.hidden = false;
-  refreshButton();
-});
+if (recoverLegacyPendingRegistration()) {
+  showStatus("Recovered the pending project registration. Returning to Pilot…", "success");
+  window.location.replace(canonicalWorkspaceUrl());
+} else {
+  readSessionState().then(() => {
+    if (!sessionAuthenticated) authEntry.hidden = false;
+    refreshButton();
+  });
+}
 </script>
 </body>
 </html>
