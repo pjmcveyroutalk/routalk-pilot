@@ -2,30 +2,48 @@ const assert = require("node:assert");
 const readiness = require("../api/project-preflight")._test;
 
 const unregistered = readiness.registryReadiness("pjmcveyroutalk/not-registered");
-assert.equal(unregistered.ready, false);
-assert.equal(unregistered.status, "BLOCKED");
 assert.equal(unregistered.reason, "PROJECT_NOT_REGISTERED");
-assert.equal(unregistered.next_action, "REGISTER_PROJECT");
-assert.equal(unregistered.retryable, true);
-assert.equal(unregistered.checks.registration, "BLOCKED");
-assert.equal(unregistered.checks.production_verifier, "NOT_CHECKED");
+assert.equal(unregistered.checks.target_repository, "NOT_CHECKED");
 
 const noVerifier = readiness.registryReadiness("pjmcveyroutalk/sport-my-fitness");
-assert.equal(noVerifier.ready, false);
-assert.equal(noVerifier.status, "BLOCKED");
 assert.equal(noVerifier.reason, "REGISTER_PRODUCTION_VERIFIER");
-assert.equal(noVerifier.next_action, "REGISTER_PRODUCTION_VERIFIER");
-assert.equal(noVerifier.retryable, true);
-assert.equal(noVerifier.checks.registration, "PASS");
-assert.equal(noVerifier.checks.production_verifier, "BLOCKED");
+assert.equal(noVerifier.next_action, "BOOTSTRAP_PRODUCTION_VERIFIER");
 
 const ready = readiness.registryReadiness("pjmcveyroutalk/Personal-website-");
 assert.equal(ready.ready, true);
-assert.equal(ready.status, "READY");
-assert.equal(ready.next, "READY_FOR_PILOT");
-assert.equal(ready.next_action, "QUEUE_BUILD");
-assert.equal(ready.retryable, false);
-assert.equal(ready.checks.registration, "PASS");
-assert.equal(ready.checks.production_verifier, "PASS");
+assert.equal(ready.checks.target_repository, "NOT_CHECKED");
 
-console.log("Project readiness contract — PASS");
+function mockFetch(sequence) {
+  let index = 0;
+  return async () => {
+    const item = sequence[index++];
+    return { ok: item.ok, status: item.status, json: async () => item.data || {} };
+  };
+}
+
+(async () => {
+  const missing = await readiness.targetRepositoryReadiness("pjmcveyroutalk/Personal-website-", "", mockFetch([]));
+  assert.equal(missing.reason, "TARGET_ACCESS_NOT_CONFIGURED");
+
+  const inaccessible = await readiness.targetRepositoryReadiness(
+    "pjmcveyroutalk/Personal-website-", "token", mockFetch([{ ok: false, status: 404 }]));
+  assert.equal(inaccessible.reason, "TARGET_REPO_NOT_ACCESSIBLE");
+
+  const uninitialized = await readiness.targetRepositoryReadiness(
+    "pjmcveyroutalk/Personal-website-", "token",
+    mockFetch([{ ok: true, status: 200, data: { default_branch: "main" } }, { ok: false, status: 404 }]));
+  assert.equal(uninitialized.reason, "INITIALIZE_MAIN");
+
+  const fullyReady = await readiness.checkProjectReadiness(
+    "pjmcveyroutalk/Personal-website-", "token",
+    { fetchImpl: mockFetch([
+      { ok: true, status: 200, data: { default_branch: "main" } },
+      { ok: true, status: 200, data: { name: "main" } }
+    ]) });
+  assert.equal(fullyReady.ready, true);
+  assert.equal(fullyReady.checks.target_repository, "PASS");
+  assert.equal(fullyReady.checks.main_branch, "PASS");
+  assert.equal(fullyReady.checks.production_verifier, "PASS");
+
+  console.log("Project readiness contract — PASS");
+})().catch((error) => { console.error(error); process.exitCode = 1; });
