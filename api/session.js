@@ -4,6 +4,7 @@ const commandHandler = require("./command");
 const mergeHandler = require("./merge");
 const createProjectHandler = require("./create-project");
 const provisionVercelProjectHandler = require("./provision-vercel-project");
+const teardownProjectHandler = require("../lib/project-teardown");
 const {
   clearSessionCookie,
   createSessionToken,
@@ -54,6 +55,8 @@ async function delegateAuthenticated(request, response, triggerSecret, action) {
   if (action === "create-project" && request.method === "POST") return createProjectHandler(request, response);
   if (action === "provision-vercel-project" && request.method === "POST")
     return provisionVercelProjectHandler(request, response);
+  if (action === "teardown-project" && request.method === "POST")
+    return teardownProjectHandler(request, response);
 
   response.setHeader("Allow", action === "command" ? "GET" : "POST");
   return send(response, 405, crypto.randomUUID(), { error: "Method not allowed" });
@@ -69,7 +72,7 @@ module.exports = async function handler(request, response) {
 
   const action = requestedAction(request);
   if (action) {
-    if (!["queue", "command", "merge", "create-project", "provision-vercel-project"].includes(action))
+    if (!["queue", "command", "merge", "create-project", "provision-vercel-project", "teardown-project"].includes(action))
       return send(response, 400, requestId, { error: "Invalid session action" });
     return delegateAuthenticated(request, response, triggerSecret, action);
   }
