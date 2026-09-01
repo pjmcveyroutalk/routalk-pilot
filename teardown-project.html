@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#09111f">
+<title>Pilot Project Teardown</title>
+<style>
+body{margin:0;background:#09111f;color:#f4f7fb;font-family:system-ui,sans-serif}
+main{max-width:560px;margin:0 auto;padding:28px 18px 48px}
+.card{border:1px solid #294467;background:#07101d;border-radius:16px;padding:18px;margin:16px 0}
+h1{font-size:1.6rem;margin:0 0 8px}p{line-height:1.5;color:#b8c5d6}
+label{display:block;font-weight:800;margin:14px 0 7px}
+input{width:100%;box-sizing:border-box;min-height:48px;border-radius:12px;border:1px solid #385779;background:#0a1626;color:#fff;padding:10px 12px;font:inherit}
+button,a.button{display:block;width:100%;box-sizing:border-box;min-height:48px;border:0;border-radius:12px;padding:13px 16px;margin-top:12px;font:inherit;font-weight:900;text-align:center;text-decoration:none}
+button{background:#6fe7d2;color:#07101d}button.danger{background:#ff7777;color:#220606}button:disabled{opacity:.45}
+.status{white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:.84rem;color:#c9d6e6}
+.warning{color:#ffb6b6;font-weight:800}
+a.button{background:#1d3350;color:#f4f7fb}
+</style>
+</head>
+<body>
+<main>
+<h1>Controlled Project Teardown</h1>
+<p>This experimental path is locked to <strong>pilot-customer-zero-01</strong>. It cannot delete Pilot or another project.</p>
+
+<section class="card">
+<label for="repository">Repository</label>
+<input id="repository" value="pjmcveyroutalk/pilot-customer-zero-01" readonly>
+<button id="inspect">Inspect teardown</button>
+<div id="inspect-status" class="status"></div>
+</section>
+
+<section class="card">
+<p class="warning">Permanent action: this deletes the Vercel project and GitHub repository.</p>
+<label for="confirmation">Type the exact confirmation shown after inspection</label>
+<input id="confirmation" autocomplete="off" spellcheck="false" disabled>
+<button id="erase" class="danger" disabled>Erase disposable project</button>
+<div id="erase-status" class="status"></div>
+<a id="cleanup-download" class="button" hidden>Download registry cleanup package</a>
+<a id="return-pilot" class="button" href="https://routalk-pilot.vercel.app" hidden>Return to Pilot</a>
+</section>
+</main>
+<script>
+(() => {
+  const DEVICE_KEY = "pilot:device-session.v1";
+  const repository = document.querySelector("#repository");
+  const confirmation = document.querySelector("#confirmation");
+  const inspectButton = document.querySelector("#inspect");
+  const eraseButton = document.querySelector("#erase");
+  const inspectStatus = document.querySelector("#inspect-status");
+  const eraseStatus = document.querySelector("#erase-status");
+  const cleanupDownload = document.querySelector("#cleanup-download");
+  const returnPilot = document.querySelector("#return-pilot");
+
+  function deviceHeaders() {
+    let token = "";
+    try { token = localStorage.getItem(DEVICE_KEY) || ""; } catch {}
+    return token ? { "x-pilot-device-session": token } : {};
+  }
+
+  async function call(body) {
+    const response = await fetch("/api/session?action=teardown-project", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+        ...deviceHeaders(),
+      },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(result.error || "Pilot teardown request failed.");
+      error.result = result;
+      throw error;
+    }
+    return result;
+  }
+
+  inspectButton.addEventListener("click", async () => {
+    inspectButton.disabled = true;
+    inspectStatus.textContent = "Inspecting...";
+    eraseButton.disabled = true;
+    confirmation.disabled = true;
+    try {
+      const result = await call({
+        repository: repository.value,
+        mode: "inspect",
+      });
+      const r = result.readiness || {};
+      inspectStatus.textContent =
+        "Preflight PASS\n" +
+        "GitHub repository: " + (r.github?.present ? "present" : "missing") + "\n" +
+        "GitHub admin: " + (r.github?.admin ? "yes" : "no") + "\n" +
+        "Vercel project: " + (r.vercel?.present ? "present" : "already absent") + "\n" +
+        "Registry baseline: " + (r.registry?.current ? "current" : "stale") + "\n\n" +
+        "Confirmation:\n" + result.confirmation_required;
+      confirmation.placeholder = result.confirmation_required;
+      confirmation.disabled = false;
+      eraseButton.disabled = false;
+    } catch (error) {
+      inspectStatus.textContent =
+        "Preflight BLOCKED\n" +
+        (error.message || "Unknown error") + "\n" +
+        JSON.stringify(error.result?.readiness || {}, null, 2);
+    } finally {
+      inspectButton.disabled = false;
+    }
+  });
+
+  eraseButton.addEventListener("click", async () => {
+    eraseButton.disabled = true;
+    inspectButton.disabled = true;
+    eraseStatus.textContent = "Executing controlled teardown...";
+    try {
+      const result = await call({
+        repository: repository.value,
+        mode: "execute",
+        confirmation: confirmation.value,
+      });
+      eraseStatus.textContent =
+        "Teardown PASS\nGitHub repository deleted.\nVercel project deleted.\nRegistry cleanup package is ready.";
+      const blob = new Blob(
+        [JSON.stringify(result.cleanup_package)],
+        { type: "application/json" },
+      );
+      const url = URL.createObjectURL(blob);
+      cleanupDownload.href = url;
+      cleanupDownload.download =
+        result.cleanup_package.command_id + ".pilot";
+      cleanupDownload.hidden = false;
+      returnPilot.hidden = false;
+      confirmation.disabled = true;
+    } catch (error) {
+      eraseStatus.textContent =
+        "Teardown BLOCKED\n" +
+        (error.message || "Unknown error") + "\n" +
+        JSON.stringify(error.result || {}, null, 2);
+      eraseButton.disabled = false;
+      inspectButton.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
