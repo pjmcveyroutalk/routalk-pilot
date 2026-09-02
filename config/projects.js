@@ -51,4 +51,7 @@ module.exports = Object.freeze({
       auth: "vercel_oidc",
     }),
   }),
+  "pjmcveyroutalk/routalk-daycare": Object.freeze({
+    role: "target",
+  }),
 });
