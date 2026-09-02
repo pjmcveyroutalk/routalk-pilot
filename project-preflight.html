@@ -1,1 +1,234 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Project preflight — Routalk Pilot</title></head><body><main><h1>Project preflight</h1><p>Run Pilot's authoritative target-readiness check without creating or queueing a build command.</p><form id="f"><label>Target repository <input id="r" required></label><label>Pilot trigger secret <input id="s" type="password" required></label><button>Run preflight</button></form><pre id="o"></pre></main><script>const p=new URLSearchParams(location.search);r.value=p.get("repository")||"";f.onsubmit=async e=>{e.preventDefault();o.textContent="Running…";const secret=s.value;s.value="";try{const x=await fetch("/api/project-preflight",{method:"POST",headers:{Authorization:`Bearer ${secret}`,"Content-Type":"application/json"},body:JSON.stringify({repository:r.value.trim()})});const d=await x.json().catch(()=>({}));o.textContent=JSON.stringify(d,null,2)}catch(err){o.textContent=err.message||"Preflight failed"}};</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#09111f" />
+<title>Project preflight — Routalk Pilot</title>
+<style>
+:root{
+  color-scheme:dark;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:#09111f;
+  color:#f4f7fb
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  min-height:100vh;
+  padding:24px;
+  background:radial-gradient(circle at top,#173156 0,transparent 42%),#09111f
+}
+main{
+  width:min(100%,440px);
+  margin:0 auto;
+  padding:28px;
+  border:1px solid #294467;
+  border-radius:24px;
+  background:rgba(12,24,42,.96);
+  box-shadow:0 24px 70px rgba(0,0,0,.35)
+}
+.eyebrow{
+  margin:0 0 8px;
+  color:#6fe7d2;
+  font-size:.78rem;
+  font-weight:800;
+  letter-spacing:.14em;
+  text-transform:uppercase
+}
+h1{margin:0;font-size:clamp(2rem,9vw,3rem);line-height:1.02}
+.description{margin:12px 0 24px;color:#b8c7db;line-height:1.55}
+label{display:block;margin:16px 0 8px;font-size:.9rem;font-weight:800}
+input{
+  width:100%;
+  min-height:50px;
+  padding:12px 14px;
+  border:1px solid #385779;
+  border-radius:12px;
+  background:#07101d;
+  color:#fff;
+  font:inherit
+}
+input:focus{
+  outline:3px solid rgba(111,231,210,.24);
+  border-color:#6fe7d2
+}
+button{
+  width:100%;
+  min-height:54px;
+  margin-top:18px;
+  border:0;
+  border-radius:14px;
+  background:#6fe7d2;
+  color:#06131d;
+  font:inherit;
+  font-weight:900;
+  cursor:pointer
+}
+button:disabled{cursor:wait;opacity:.65}
+.helper{
+  margin:8px 0 0;
+  color:#8296b0;
+  font-size:.78rem;
+  line-height:1.45
+}
+#status{
+  min-height:24px;
+  margin:16px 0 0;
+  color:#b8c7db;
+  font-size:.92rem;
+  line-height:1.45;
+  white-space:pre-line
+}
+#status[data-state="success"]{color:#7cf2bd}
+#status[data-state="error"]{color:#ff9a9a}
+.result{
+  margin-top:16px;
+  padding:14px;
+  border:1px solid #385779;
+  border-radius:14px;
+  background:#07101d
+}
+.result[hidden]{display:none}
+.result h2{margin:0 0 12px;font-size:1rem}
+.result dl{
+  display:grid;
+  grid-template-columns:minmax(95px,auto) minmax(0,1fr);
+  gap:8px 12px;
+  margin:0;
+  font-size:.82rem
+}
+.result dt{color:#8296b0;font-weight:700}
+.result dd{margin:0;overflow-wrap:anywhere}
+.badge{
+  display:inline-block;
+  padding:4px 8px;
+  border-radius:999px;
+  font-size:.75rem;
+  font-weight:900;
+  background:#173156;
+  color:#b8c7db
+}
+.badge.ready{background:#12372f;color:#7cf2bd}
+.badge.blocked{background:#3b2024;color:#ff9a9a}
+@media(max-width:380px){
+  body{padding:14px}
+  main{padding:22px}
+  .result dl{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<main>
+<p class="eyebrow">Routalk Pilot</p>
+<h1>Project preflight</h1>
+<p class="description">Check whether a target is ready for Pilot before queueing a build. This does not create a command or change the target repository.</p>
+
+<form id="preflight-form">
+  <label for="repository">Target repository</label>
+  <input id="repository" type="text" autocomplete="off" required />
+
+  <label for="secret">Pilot trigger secret</label>
+  <input id="secret" type="password" autocomplete="current-password" required />
+  <p class="helper">Used only for this readiness check. The page does not store it.</p>
+
+  <button id="run-button" type="submit">Run preflight</button>
+</form>
+
+<p id="status" role="status" aria-live="polite"></p>
+
+<section id="result" class="result" hidden>
+  <h2>Readiness result</h2>
+  <dl id="details"></dl>
+</section>
+</main>
+
+<script>
+const form = document.querySelector("#preflight-form");
+const repositoryInput = document.querySelector("#repository");
+const secretInput = document.querySelector("#secret");
+const runButton = document.querySelector("#run-button");
+const status = document.querySelector("#status");
+const result = document.querySelector("#result");
+const details = document.querySelector("#details");
+
+const params = new URLSearchParams(window.location.search);
+repositoryInput.value = params.get("repository") || "";
+
+function showStatus(message, state = "") {
+  status.textContent = message;
+  status.dataset.state = state;
+}
+
+function textValue(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+
+function addDetail(label, value, badgeClass = "") {
+  if (value == null || value === "") return;
+  const dt = document.createElement("dt");
+  const dd = document.createElement("dd");
+  dt.textContent = label;
+  if (badgeClass) {
+    const span = document.createElement("span");
+    span.className = `badge ${badgeClass}`;
+    span.textContent = textValue(value);
+    dd.append(span);
+  } else {
+    dd.textContent = textValue(value);
+  }
+  details.append(dt, dd);
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  result.hidden = true;
+  details.replaceChildren();
+  runButton.disabled = true;
+  showStatus("Running Pilot preflight…");
+
+  const repository = repositoryInput.value.trim();
+  const secret = secretInput.value;
+
+  try {
+    const response = await fetch("/api/project-preflight", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${secret}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ repository })
+    });
+
+    const data = await response.json().catch(() => ({}));
+    secretInput.value = "";
+
+    const badgeClass = data.ready === true ? "ready" : "blocked";
+    addDetail("Repository", data.repository || repository);
+    addDetail("Status", data.status || (data.ready === true ? "READY" : "BLOCKED"), badgeClass);
+    addDetail("Next action", data.next_action || data.next);
+    addDetail("Reason", data.reason);
+    addDetail("Default branch", data.default_branch);
+    addDetail("Checks", data.checks);
+    addDetail("Verifier", data.production_verifier);
+    addDetail("Provider status", data.provider_status);
+
+    result.hidden = false;
+
+    if (response.ok && data.ready === true) {
+      showStatus("Pilot reports this target READY.", "success");
+    } else {
+      showStatus(data.message || data.error || `Pilot preflight blocked (${response.status}).`, "error");
+    }
+  } catch (error) {
+    secretInput.value = "";
+    showStatus(error.message || "Pilot preflight failed.", "error");
+  } finally {
+    runButton.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
