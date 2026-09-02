@@ -117,11 +117,22 @@
         if (!response.ok || !result.registration_package)
           throw new Error(result.error || "Pilot could not prepare project registration.");
         const key = "routalk-pilot.pending-package.v3:" + CONTROL_REPOSITORY;
-        storageSet(key, JSON.stringify({
+        const pending = JSON.stringify({
           saved_at: Date.now(),
           command: result.registration_package
-        }));
-        location.assign("/workspace.html?repository=" + encodeURIComponent(CONTROL_REPOSITORY));
+        });
+        storageSet(key, pending);
+
+        // Verify the handoff survived storage before navigating. Mobile browsers can
+        // otherwise make a successful registration preparation look like a no-op.
+        if (storageGet(key) !== pending) {
+          throw new Error("Pilot could not preserve the registration review on this device.");
+        }
+
+        location.assign(
+          "/workspace.html?repository=" + encodeURIComponent(CONTROL_REPOSITORY) +
+          "&pending_registration=1"
+        );
       } catch (error) {
         button.disabled = false;
         status.textContent = error.message || "Project registration could not be prepared.";
@@ -129,6 +140,20 @@
       }
     });
     return;
+  }
+
+  if (selected === CONTROL_REPOSITORY && params.get("pending_registration") === "1") {
+    const pendingKey = "routalk-pilot.pending-package.v3:" + CONTROL_REPOSITORY;
+    if (!storageGet(pendingKey)) {
+      document.body.style.background = "#09111f";
+      document.body.innerHTML =
+        '<main style="max-width:440px;margin:48px auto;padding:24px;color:#fff;font-family:system-ui">' +
+        '<p style="color:#ff9a9a;font-weight:800">Registration handoff interrupted</p>' +
+        '<h1>Routalk Pilot</h1>' +
+        '<p style="color:#b8c7db;line-height:1.5">Pilot prepared the registration but the browser did not preserve its review package. Return to the available repository and prepare registration again.</p>' +
+        '</main>';
+      return;
+    }
   }
 
   const indexResponse = await fetch("/index.html", {
