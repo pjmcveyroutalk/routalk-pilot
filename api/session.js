@@ -3,6 +3,7 @@ const queueHandler = require("./queue");
 const commandHandler = require("./command");
 const mergeHandler = require("./merge");
 const createProjectHandler = require("./create-project");
+const projectCatalogHandler = require("../lib/project-catalog");
 const provisionVercelProjectHandler = require("./provision-vercel-project");
 const teardownProjectHandler = require("../lib/project-teardown");
 const {
@@ -53,12 +54,15 @@ async function delegateAuthenticated(request, response, triggerSecret, action) {
   if (action === "command" && request.method === "GET") return commandHandler(request, response);
   if (action === "merge" && request.method === "POST") return mergeHandler(request, response);
   if (action === "create-project" && request.method === "POST") return createProjectHandler(request, response);
+  if (action === "project-catalog" && ["GET", "POST"].includes(request.method))
+    return projectCatalogHandler(request, response);
   if (action === "provision-vercel-project" && request.method === "POST")
     return provisionVercelProjectHandler(request, response);
   if (action === "teardown-project" && request.method === "POST")
     return teardownProjectHandler(request, response);
 
-  response.setHeader("Allow", action === "command" ? "GET" : "POST");
+  response.setHeader("Allow", action === "command" ? "GET" :
+    action === "project-catalog" ? "GET, POST" : "POST");
   return send(response, 405, crypto.randomUUID(), { error: "Method not allowed" });
 }
 
@@ -72,7 +76,7 @@ module.exports = async function handler(request, response) {
 
   const action = requestedAction(request);
   if (action) {
-    if (!["queue", "command", "merge", "create-project", "provision-vercel-project", "teardown-project"].includes(action))
+    if (!["queue", "command", "merge", "create-project", "project-catalog", "provision-vercel-project", "teardown-project"].includes(action))
       return send(response, 400, requestId, { error: "Invalid session action" });
     return delegateAuthenticated(request, response, triggerSecret, action);
   }
