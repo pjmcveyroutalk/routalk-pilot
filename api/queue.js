@@ -8,6 +8,7 @@ const { normalizeCommand } = require("../lib/command-contract");
 const {
   createGithubIssueCommandStore,
 } = require("../lib/stores/github-issue-command-store");
+const { resolveTargetGithubToken } = require("../lib/github-credentials");
 const { _test: projectPreflight } = require("./project-preflight");
 
 const GITHUB_API = "https://api.github.com";
@@ -92,7 +93,7 @@ function readinessMessage(readiness) {
       return "Project is not ready for Pilot: register this repository in Pilot first.";
     case "TARGET_ACCESS_NOT_CONFIGURED":
     case "TARGET_REPO_NOT_ACCESSIBLE":
-      return "Project is not ready for Pilot: target repository access is missing. Add this repository to Pilot's target GitHub credential, then submit again.";
+      return "Project is not ready for Pilot: target repository access is missing. Pilot's target GitHub credential must be repaired, then submit again.";
     case "TARGET_REPO_CHECK_FAILED":
       return "Pilot could not verify target repository access. Try again before submitting the build.";
     case "INITIALIZE_MAIN":
@@ -154,7 +155,7 @@ module.exports = async function handler(request, response) {
   const controlRepository = `${owner}/${repository}`;
   let onboardingBootstrap = false;
   if (command.repository !== controlRepository) {
-    const targetToken = process.env.PILOT_TARGET_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
+    const targetToken = resolveTargetGithubToken();
     let readiness;
     try {
       readiness = await projectPreflight.checkProjectReadiness(command.repository, targetToken);
@@ -241,4 +242,5 @@ module.exports._test = {
   isVerifierBootstrapCommand,
   normalizeCommand,
   readinessMessage,
+  resolveTargetGithubToken,
 };
