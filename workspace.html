@@ -102,7 +102,7 @@
       const button = document.querySelector("#register-project");
       const status = document.querySelector("#register-status");
       button.disabled = true;
-      status.textContent = "Preparing guarded registration package…";
+      status.textContent = "Preparing guarded registration review…";
       try {
         const response = await fetch("/api/session?action=project-catalog", {
           method: "POST",
@@ -116,23 +116,78 @@
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result.registration_package)
           throw new Error(result.error || "Pilot could not prepare project registration.");
-        const key = "routalk-pilot.pending-package.v3:" + CONTROL_REPOSITORY;
-        const pending = JSON.stringify({
-          saved_at: Date.now(),
-          command: result.registration_package
+
+        const command = result.registration_package;
+        const scope = command.change_scope || {};
+        const paths = Array.isArray(scope.touched_paths) ? scope.touched_paths : [];
+        const review = document.createElement("section");
+        review.style.marginTop = "18px";
+        review.style.padding = "14px";
+        review.style.border = "1px solid #385779";
+        review.style.borderRadius = "14px";
+        review.style.background = "#07101d";
+        review.innerHTML =
+          '<h2 style="margin:0 0 10px;font-size:1rem">Registration review</h2>' +
+          '<p style="color:#b8c7db;line-height:1.5;margin:0 0 8px"><strong>Repository:</strong> ' +
+          escapeHtml(selected) + '</p>' +
+          '<p style="color:#b8c7db;line-height:1.5;margin:0 0 8px"><strong>Change:</strong> ' +
+          escapeHtml(scope.requested_change || "Register repository as a Pilot target.") + '</p>' +
+          '<p style="color:#b8c7db;line-height:1.5;margin:0 0 8px"><strong>Paths:</strong> ' +
+          escapeHtml(paths.join(", ") || "config/projects.js") + '</p>' +
+          '<p style="color:#8296b0;line-height:1.5;margin:0">Submitting creates a protected Pilot command and PR. Merge remains a separate explicit approval.</p>';
+
+        const submit = document.createElement("button");
+        submit.type = "button";
+        submit.textContent = "Submit approved registration";
+        submit.style.width = "100%";
+        submit.style.minHeight = "54px";
+        submit.style.marginTop = "14px";
+        submit.style.border = "0";
+        submit.style.borderRadius = "14px";
+        submit.style.background = "#6fe7d2";
+        submit.style.color = "#06131d";
+        submit.style.font = "inherit";
+        submit.style.fontWeight = "900";
+        review.append(submit);
+        button.replaceWith(review);
+        status.textContent = "Review the registration, then submit it through Pilot.";
+
+        submit.addEventListener("click", async () => {
+          submit.disabled = true;
+          submit.textContent = "Encrypting and submitting…";
+          status.textContent = "Submitting approved registration through Pilot's encrypted queue…";
+          try {
+            const queued = await fetch("/api/session?action=queue", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Pilot-Device-Session": deviceSession
+              },
+              body: JSON.stringify(command)
+            });
+            const queueResult = await queued.json().catch(() => ({}));
+            if (!queued.ok || !queueResult.command_id)
+              throw new Error(queueResult.error || "Pilot could not queue project registration.");
+
+            try {
+              localStorage.setItem(
+                "pilot:last-command-id:" + CONTROL_REPOSITORY,
+                queueResult.command_id
+              );
+            } catch {}
+
+            location.assign(
+              "/workspace.html?repository=" + encodeURIComponent(CONTROL_REPOSITORY) +
+              "&resume_command=" + encodeURIComponent(queueResult.command_id)
+            );
+          } catch (error) {
+            submit.disabled = false;
+            submit.textContent = "Submit approved registration";
+            status.textContent = error.message || "Project registration could not be queued.";
+            status.style.color = "#ff9a9a";
+          }
         });
-        storageSet(key, pending);
-
-        // Verify the handoff survived storage before navigating. Mobile browsers can
-        // otherwise make a successful registration preparation look like a no-op.
-        if (storageGet(key) !== pending) {
-          throw new Error("Pilot could not preserve the registration review on this device.");
-        }
-
-        location.assign(
-          "/workspace.html?repository=" + encodeURIComponent(CONTROL_REPOSITORY) +
-          "&pending_registration=1"
-        );
       } catch (error) {
         button.disabled = false;
         status.textContent = error.message || "Project registration could not be prepared.";
@@ -248,6 +303,24 @@
     next.searchParams.set("repository", selector.value);
     location.assign(next.pathname + next.search);
   });
+
+  const resumeCommand = new URLSearchParams(location.search).get("resume_command") || "";
+  if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(resumeCommand) &&
+      selector.value === "${CONTROL_REPOSITORY}") {
+    try { localStorage.setItem("pilot:last-command-id:" + selector.value, resumeCommand); } catch {}
+    setTimeout(() => {
+      if (typeof monitorCommand === "function") {
+        const status = document.querySelector("#status");
+        if (status) status.textContent = "Registration queued securely. Following this command now…";
+        monitorCommand(resumeCommand, 4).catch(error => {
+          if (status) {
+            status.textContent = error?.message || "The registration command could not be resumed.";
+            status.dataset.state = "error";
+          }
+        });
+      }
+    }, 0);
+  }
 
   if (packageInput) {
     packageInput.addEventListener("change", async () => {
