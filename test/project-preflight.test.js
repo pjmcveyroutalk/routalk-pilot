@@ -34,6 +34,23 @@ function mockFetch(sequence) {
     mockFetch([{ ok: true, status: 200, data: { default_branch: "main" } }, { ok: false, status: 404 }]));
   assert.equal(uninitialized.reason, "INITIALIZE_MAIN");
 
+  const unregisteredAccessible = await readiness.checkProjectReadiness(
+    "pjmcveyroutalk/not-registered", "token",
+    { fetchImpl: mockFetch([
+      { ok: true, status: 200, data: { default_branch: "main" } },
+      { ok: true, status: 200, data: { name: "main" } }
+    ]) });
+  assert.equal(unregisteredAccessible.reason, "PROJECT_NOT_REGISTERED");
+  assert.equal(unregisteredAccessible.target_accessible, true);
+  assert.equal(unregisteredAccessible.checks.target_repository, "PASS");
+  assert.equal(unregisteredAccessible.checks.main_branch, "PASS");
+
+  const unregisteredWithoutCredential = await readiness.checkProjectReadiness(
+    "pjmcveyroutalk/not-registered", "", { fetchImpl: mockFetch([]) });
+  assert.equal(unregisteredWithoutCredential.reason, "TARGET_ACCESS_NOT_CONFIGURED");
+  assert.equal(unregisteredWithoutCredential.registered, false);
+  assert.equal(unregisteredWithoutCredential.checks.registration, "BLOCKED");
+
   const fullyReady = await readiness.checkProjectReadiness(
     "pjmcveyroutalk/Personal-website-", "token",
     { fetchImpl: mockFetch([
