@@ -53,5 +53,9 @@ module.exports = Object.freeze({
   }),
   "pjmcveyroutalk/routalk-daycare": Object.freeze({
     role: "target",
+    production_verifier: Object.freeze({
+      url: "https://routalk-daycare.vercel.app/api/pilot-verify-production",
+      auth: "vercel_oidc",
+    }),
   }),
 });
