@@ -10,19 +10,26 @@
 <script>
 (async () => {
   const ACTIVE_PROJECT_KEY = "pilot:active-project.v1";
+  const DEVICE_SESSION_KEY = "pilot:device-session.v1";
+  const CONTROL_REPOSITORY = "pjmcveyroutalk/routalk-pilot";
   const params = new URLSearchParams(location.search);
 
   function validRepository(value) {
     return typeof value === "string" &&
       /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(value);
   }
-
   function escapeHtml(value) {
     return String(value)
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
+  }
+  function storageGet(key) {
+    try { return localStorage.getItem(key); } catch { return null; }
+  }
+  function storageSet(key, value) {
+    try { localStorage.setItem(key, value); } catch {}
   }
 
   let projects = [];
@@ -32,12 +39,11 @@
       cache: "no-store"
     });
     const result = await response.json();
-    if (!response.ok || !Array.isArray(result.projects)) {
+    if (!response.ok || !Array.isArray(result.projects))
       throw new Error(result.error || "Project registry unavailable.");
-    }
-    projects = result.projects.filter(
-      item => item && validRepository(item.repository)
-    );
+    projects = result.projects
+      .filter(item => item && validRepository(item.repository))
+      .map(item => ({ ...item, registered: true, authorized: null }));
   } catch (error) {
     document.body.innerHTML =
       '<main style="max-width:440px;margin:48px auto;padding:24px;color:#fff;font-family:system-ui">' +
@@ -47,19 +53,82 @@
     return;
   }
 
+  const deviceSession = storageGet(DEVICE_SESSION_KEY) || "";
+  if (deviceSession) {
+    try {
+      const response = await fetch("/api/session?action=project-catalog", {
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "X-Pilot-Device-Session": deviceSession }
+      });
+      const result = await response.json();
+      if (response.ok && Array.isArray(result.projects)) {
+        projects = result.projects.filter(item => item && validRepository(item.repository));
+      }
+    } catch {
+      // Static registered projects remain the safe fallback.
+    }
+  }
+
   const repositories = new Set(projects.map(item => item.repository));
   let selected = params.get("repository") || "";
-  if (!repositories.has(selected)) {
-    try { selected = localStorage.getItem(ACTIVE_PROJECT_KEY) || ""; } catch {}
-  }
+  if (!repositories.has(selected)) selected = storageGet(ACTIVE_PROJECT_KEY) || "";
   if (!repositories.has(selected)) {
     selected =
-      projects.find(item => item.role === "target")?.repository ||
+      projects.find(item => item.role === "target" && item.registered !== false)?.repository ||
+      projects.find(item => item.role === "control")?.repository ||
       projects[0]?.repository ||
       "";
   }
-  if (selected) {
-    try { localStorage.setItem(ACTIVE_PROJECT_KEY, selected); } catch {}
+  if (selected) storageSet(ACTIVE_PROJECT_KEY, selected);
+
+  const selectedProject = projects.find(item => item.repository === selected);
+  if (selectedProject?.registered === false) {
+    document.body.style.background = "#09111f";
+    document.body.innerHTML = `
+      <main style="max-width:440px;margin:48px auto;padding:24px;color:#fff;font-family:system-ui">
+        <p style="color:#6fe7d2;font-weight:800">Authorized repository</p>
+        <h1 style="overflow-wrap:anywhere">${escapeHtml(selected)}</h1>
+        <p style="color:#b8c7db;line-height:1.5">
+          Pilot can access this repository, but it is not registered yet.
+          Registration is a protected Pilot change and still requires package review and merge approval.
+        </p>
+        <button id="register-project" style="width:100%;min-height:54px;border:0;border-radius:14px;background:#6fe7d2;color:#06131d;font:inherit;font-weight:900">
+          Prepare registration
+        </button>
+        <p id="register-status" style="color:#b8c7db;line-height:1.5"></p>
+      </main>`;
+    document.querySelector("#register-project").addEventListener("click", async () => {
+      const button = document.querySelector("#register-project");
+      const status = document.querySelector("#register-status");
+      button.disabled = true;
+      status.textContent = "Preparing guarded registration package…";
+      try {
+        const response = await fetch("/api/session?action=project-catalog", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Pilot-Device-Session": deviceSession
+          },
+          body: JSON.stringify({ repository: selected })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.registration_package)
+          throw new Error(result.error || "Pilot could not prepare project registration.");
+        const key = "routalk-pilot.pending-package.v3:" + CONTROL_REPOSITORY;
+        storageSet(key, JSON.stringify({
+          saved_at: Date.now(),
+          command: result.registration_package
+        }));
+        location.assign("/workspace.html?repository=" + encodeURIComponent(CONTROL_REPOSITORY));
+      } catch (error) {
+        button.disabled = false;
+        status.textContent = error.message || "Project registration could not be prepared.";
+        status.style.color = "#ff9a9a";
+      }
+    });
+    return;
   }
 
   const indexResponse = await fetch("/index.html", {
@@ -109,7 +178,11 @@
   const options = projects.map(project => {
     const repo = project.repository;
     const name = repo.split("/")[1] || repo;
-    const suffix = project.role === "control" ? " (Pilot)" : "";
+    const suffix = project.role === "control"
+      ? " (Pilot)"
+      : project.registered === false
+        ? " (available)"
+        : "";
     return `<option value="${escapeHtml(repo)}"${repo === selected ? " selected" : ""}>${escapeHtml(name + suffix)}</option>`;
   }).join("");
 
@@ -117,7 +190,7 @@
 <section class="project-context" aria-label="Active project">
   <label for="active-project">Active project</label>
   <select id="active-project">${options}</select>
-  <p class="active-project-note">Pilot keeps this project selected on this device. Protected actions still show the exact repository before approval.</p>
+  <p class="active-project-note">Pilot shows registered projects plus repositories authorized to its target GitHub credential. Protected actions still require review.</p>
 </section>`;
 
   html = html.replace("</style>", selectorCss + "\n</style>");
@@ -160,7 +233,7 @@
         const effectiveRepository =
           typeof value.repository === "string" && value.repository
             ? value.repository
-            : "pjmcveyroutalk/routalk-pilot";
+            : "${CONTROL_REPOSITORY}";
         if (effectiveRepository !== selector.value) {
           packageInput.value = "";
           const status = document.querySelector("#status");
