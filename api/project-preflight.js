@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
 const projects = require("../config/projects");
+const { resolveTargetGithubToken } = require("../lib/github-credentials");
 
 const READINESS_STATUS = Object.freeze({ READY: "READY", BLOCKED: "BLOCKED" });
 const VERIFIER_BOOTSTRAP_PATH = "api/pilot-verify-production.js";
@@ -85,7 +86,7 @@ async function targetRepositoryReadiness(repository, token, fetchImpl = fetch) {
   const repoResult = await githubGet(`${GITHUB_API}/repos/${encodedRepository}`, token, fetchImpl);
   if ([401, 403, 404].includes(repoResult.status)) {
     return blocked(repository, "TARGET_REPO_NOT_ACCESSIBLE",
-      "Project is not ready for Pilot: target repository access is missing. Add this repository to Pilot's target GitHub credential, then retry.",
+      "Project is not ready for Pilot: target repository access is missing. Pilot's target GitHub credential must be repaired, then retry.",
       "AUTHORIZE_TARGET_REPOSITORY",
       { checks: { target_repository: "BLOCKED" }, provider_status: repoResult.status });
   }
@@ -119,20 +120,39 @@ async function targetRepositoryReadiness(repository, token, fetchImpl = fetch) {
 }
 async function checkProjectReadiness(repository, targetToken, options = {}) {
   const registry = registryReadiness(repository);
-  if (registry.reason === "PROJECT_NOT_REGISTERED") return registry;
   const access = await targetRepositoryReadiness(repository, targetToken, options.fetchImpl || fetch);
+
   if (!access.ready) {
+    const registered = registry.reason !== "PROJECT_NOT_REGISTERED";
     return {
-      ...access, registered: true,
-      production_verifier: registry.production_verifier,
-      verifier_bootstrap: registry.verifier_bootstrap,
+      ...access,
+      registered,
+      production_verifier: registered ? registry.production_verifier : undefined,
+      verifier_bootstrap: registered ? registry.verifier_bootstrap : undefined,
       checks: {
-        registration: "PASS",
+        registration: registered ? "PASS" : "BLOCKED",
         ...(access.checks || {}),
-        production_verifier: registry.checks?.production_verifier || "NOT_CHECKED"
+        production_verifier: registered
+          ? registry.checks?.production_verifier || "NOT_CHECKED"
+          : "NOT_CHECKED"
       }
     };
   }
+
+  if (registry.reason === "PROJECT_NOT_REGISTERED") {
+    return {
+      ...registry,
+      target_accessible: true,
+      default_branch: access.default_branch,
+      checks: {
+        registration: "BLOCKED",
+        target_repository: "PASS",
+        main_branch: "PASS",
+        production_verifier: "NOT_CHECKED"
+      }
+    };
+  }
+
   return {
     ...registry, default_branch: access.default_branch,
     checks: { ...(registry.checks || {}), target_repository: "PASS", main_branch: "PASS" }
@@ -147,10 +167,10 @@ module.exports = async function handler(req, res) {
   const auth = (req.headers.authorization || "").replace(/^Bearer /, "");
   if (!trigger || !safeEqual(auth, trigger)) return send(res, 401, { error: "Unauthorized" });
   const repository = String(req.body?.repository || "");
-  const targetToken = process.env.PILOT_TARGET_GITHUB_TOKEN || process.env.GITHUB_TOKEN || "";
+  const targetToken = resolveTargetGithubToken();
   const readiness = await checkProjectReadiness(repository, targetToken);
   return send(res, readiness.ready ? 200 : 400, readiness);
 };
 module.exports._test = {
-  READINESS_STATUS, VERIFIER_BOOTSTRAP_PATH, registryReadiness, targetRepositoryReadiness, checkProjectReadiness
+  READINESS_STATUS, VERIFIER_BOOTSTRAP_PATH, registryReadiness, targetRepositoryReadiness, checkProjectReadiness, resolveTargetGithubToken
 };
