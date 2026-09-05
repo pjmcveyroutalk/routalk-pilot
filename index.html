@@ -335,10 +335,35 @@ function readLastCommand() {
   const value = safeStorageGet(LAST_COMMAND_KEY) || "";
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value) ? value : "";
 }
+function forgetCommand(commandId) {
+  if (!commandId || readLastCommand() === commandId) {
+    safeStorageRemove(LAST_COMMAND_KEY);
+    refreshResumeButton();
+  }
+}
 function refreshResumeButton() {
   const commandId = readLastCommand();
   recent.hidden = !commandId;
   if (commandId) resumeLastButton.textContent = "Resume last command";
+}
+async function reconcileRememberedCommand() {
+  const commandId = readLastCommand();
+  if (!commandId || !readDeviceSession()) return;
+  try {
+    const response = await fetch(
+      `/api/session?action=command&command_id=${encodeURIComponent(commandId)}`,
+      { credentials: "same-origin", cache: "no-store", headers: deviceSessionHeaders() }
+    );
+    if (!response.ok) return;
+    const result = await response.json().catch(() => ({}));
+    if (result.state === "COMPLETED" || result.state === "FAILED") {
+      forgetCommand(commandId);
+      results.replaceChildren();
+      showStatus("");
+    }
+  } catch {
+    // Never discard resumable state on a transient lookup failure.
+  }
 }
 function decodedBase64Size(value) {
   if (typeof value !== "string" || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value))
@@ -603,6 +628,7 @@ async function monitorCommand(commandId, visibilityAttempts = 4) {
       if (!pull.merged) addMergeButton(pull, commandId);
     }
     if (result.state === "COMPLETED") {
+      forgetCommand(commandId);
       showStatus("Pilot command completed and production verification passed.", "success");
       return;
     }
@@ -616,6 +642,7 @@ async function monitorCommand(commandId, visibilityAttempts = 4) {
       return;
     }
     if (result.state === "FAILED") {
+      forgetCommand(commandId);
       showStatus(
         result.storage?.terminal
           ? "Pilot stopped this command because the package failed a terminal pre-PR check. Correct the package and submit a new command."
@@ -731,7 +758,9 @@ lockButton.addEventListener("click", async () => {
 
 refreshResumeButton();
 restorePendingPackage();
-readSessionState();
+readSessionState().then(authenticated => {
+  if (authenticated) reconcileRememberedCommand();
+});
 </script>
 </body>
 </html>
