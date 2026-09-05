@@ -730,6 +730,10 @@ packageSubmitButton.addEventListener("click", async () => {
       showStatus("This command was already submitted. Following its authoritative Pilot state now…");
       packageSubmitButton.textContent = "Monitoring…";
       await monitorCommand(commandId, 2);
+      if (!readLastCommand()) {
+        results.replaceChildren();
+        showStatus("");
+      }
       return;
     }
 
