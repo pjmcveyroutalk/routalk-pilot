@@ -58,4 +58,7 @@ module.exports = Object.freeze({
       auth: "vercel_oidc",
     }),
   }),
+  "pjmcveyroutalk/scout-wallet-lab": Object.freeze({
+    role: "target",
+  }),
 });
