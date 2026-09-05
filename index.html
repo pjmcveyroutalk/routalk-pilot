@@ -713,8 +713,25 @@ packageSubmitButton.addEventListener("click", async () => {
     });
     const result = await response.json().catch(() => ({}));
     if (handleAuthFailure(response)) return;
-    if (!response.ok)
-      throw new Error(result.error || `Package submission failed (${response.status})`);
+    if (!response.ok) {
+      const duplicateQueuedCommand =
+        response.status === 409 &&
+        typeof result.error === "string" &&
+        result.error.toLowerCase().includes("already queued");
+      if (!duplicateQueuedCommand)
+        throw new Error(result.error || `Package submission failed (${response.status})`);
+
+      const commandId = approvedPackage.command_id;
+      clearPendingPackage();
+      approvedPackage = null;
+      packageFile.value = "";
+      packageReview.hidden = true;
+      rememberCommand(commandId);
+      showStatus("This command was already submitted. Following its authoritative Pilot state now…");
+      packageSubmitButton.textContent = "Monitoring…";
+      await monitorCommand(commandId, 2);
+      return;
+    }
 
     rememberCommand(result.command_id);
     clearPendingPackage();
